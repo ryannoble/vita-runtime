@@ -13,7 +13,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 | ----------------------------- | --------------- | ------------ |
 | `vr_platform` (time, logging) | done            | planned      |
 | `vr_fs` (read-only files)     | done            | planned      |
-| `vr_input` (pad, touch)       | stub (headless) | planned      |
+| `vr_input` (pad, touch)       | headless or SDL2 gamepad | planned      |
 | `vr_gfx` (GXM)                | planned         | planned      |
 | `vr_audio`                    | planned         | planned      |
 | Direct3D 8/9 shim             | planned         | planned      |
@@ -26,6 +26,13 @@ cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+To test with a real gamepad, install SDL2 (`brew install sdl2` on macOS or
+`apt install libsdl2-dev` on Debian/Ubuntu) and configure with
+`-DVR_HOST_SDL2=ON`. The default build remains headless and needs no SDL2.
+The SDL2 backend uses the first available game controller, supports reconnecting,
+and applies the shared stick deadzone. Touch input remains empty. Poll input on
+the main thread, as required by SDL event pumping.
 
 ## Using it from a port
 
