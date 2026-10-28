@@ -11,7 +11,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Module                        | Host backend    | Vita backend |
 | ----------------------------- | --------------- | ------------ |
-| `vr_platform` (time, logging) | done            | planned      |
+| `vr_platform` (time, logging) | done            | implemented; hardware validation pending |
 | `vr_fs` (read-only files)     | done            | planned      |
 | `vr_input` (pad, touch)       | headless or SDL2 gamepad | planned      |
 | `vr_gfx` (GXM)                | planned         | planned      |
@@ -33,6 +33,20 @@ To test with a real gamepad, install SDL2 (`brew install sdl2` on macOS or
 The SDL2 backend uses the first available game controller, supports reconnecting,
 and applies the shared stick deadzone. Touch input remains empty. Poll input on
 the main thread, as required by SDL event pumping.
+
+## Building for Vita
+
+Install VitaSDK and set `VITASDK` to its root, then use a separate build directory:
+
+```sh
+cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+cmake --build build-vita
+```
+
+This builds `libvita_runtime.a`. Add `-DVR_BUILD_SAMPLES=ON` to also link the
+`vr_platform_smoke` ELF, which exercises platform timing, logging, and the
+filesystem/input placeholders. It also builds and runs on the host. See
+[src/vita/README.md](src/vita/README.md) for behavior and remaining limitations.
 
 ## Using it from a port
 

@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(vita_runtime C)
 
 option(VR_HOST_SDL2 "Use SDL2 for host input" OFF)
+option(VR_BUILD_SAMPLES "Build runtime smoke samples" OFF)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -10,10 +11,6 @@ if(VITA)
   set(VR_BACKEND vita)
 else()
   set(VR_BACKEND host)
-endif()
-
-if(VR_BACKEND STREQUAL "vita")
-  message(FATAL_ERROR "The Vita backend is not implemented yet (see src/vita/README.md)")
 endif()
 
 set(VR_INPUT_SOURCE src/${VR_BACKEND}/input.c)
@@ -30,6 +27,16 @@ add_library(vita_runtime
   ${VR_INPUT_SOURCE}
 )
 target_include_directories(vita_runtime PUBLIC include)
+if(VR_BACKEND STREQUAL "vita")
+  target_link_libraries(vita_runtime PUBLIC
+    SceLibKernel_stub SceIofilemgr_stub SceKernelThreadMgr_stub)
+  target_link_libraries(vita_runtime PRIVATE m)
+endif()
+
+if(VR_BUILD_SAMPLES)
+  add_executable(vr_platform_smoke samples/platform_smoke.c)
+  target_link_libraries(vr_platform_smoke PRIVATE vita_runtime)
+endif()
 if(UNIX AND NOT APPLE)
   target_link_libraries(vita_runtime PRIVATE m)
 endif()
