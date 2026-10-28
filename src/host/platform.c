@@ -35,6 +35,7 @@ vr_result vr_platform_init(const vr_platform_desc *desc)
 
 void vr_platform_shutdown(void)
 {
+    vr__input_shutdown();
 }
 
 uint64_t vr_time_us(void)
