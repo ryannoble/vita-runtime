@@ -14,9 +14,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 | `vr_platform` (time, logging) | done            | implemented; hardware validation pending |
 | `vr_fs` (read-only files)     | done            | implemented; hardware validation pending |
 | `vr_input` (pad, touch)       | headless or SDL2 gamepad | implemented; hardware validation pending |
-| `vr_gfx` (GXM)                | planned         | planned      |
-| `vr_audio`                    | planned         | planned      |
-| Direct3D 8/9 shim             | planned         | planned      |
+| `vr_gfx` (3D, fixed-function) | software reference rasterizer; SDL2 window optional | vitaGL; implemented, hardware validation pending |
+| `vr_audio` (mixer)            | software mixer; SDL2 device optional | sceAudioOut; implemented, hardware validation pending |
+| Direct3D 8 shim (`d3dshim/`)  | done, on top of `vr_gfx` | implemented; hardware validation pending |
+| Direct3D 9 shim               | planned         | planned      |
 | Shader translator (→ GXP)     | planned         | planned      |
 
 ## Building and testing (host)
@@ -34,6 +35,11 @@ The SDL2 backend uses the first available game controller, supports reconnecting
 and applies the shared stick deadzone. Touch input remains empty. Poll input on
 the main thread, as required by SDL event pumping.
 
+With `VR_HOST_SDL2=ON`, `vr_gfx` also opens a window that shows the back buffer,
+and `vr_audio` opens the default audio device. Set `VR_HEADLESS=1` to disable
+both. Without SDL2 there is no window or device: `vr_gfx` renders to memory
+(`vr_gfx_read_pixels`) and audio advances only through `vr_audio_render`.
+
 ## Building for Vita
 
 Install VitaSDK and set `VITASDK` to its root, then use a separate build directory:
@@ -45,7 +51,9 @@ cmake --build build-vita
 
 This builds `libvita_runtime.a`. Add `-DVR_BUILD_SAMPLES=ON` to also link the
 `vr_platform_smoke` ELF, which exercises platform timing, logging, and the
-filesystem and input backends. It also builds and runs on the host. See
+filesystem and input backends. It also builds and runs on the host. The
+`vr_gfx_spin` sample (`samples/gfx_spin.c`) draws a spinning textured square
+over a pretransformed backdrop for about five seconds. See
 [src/vita/README.md](src/vita/README.md) for behavior and remaining limitations.
 
 ## Using it from a port
