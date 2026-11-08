@@ -37,7 +37,8 @@ if(VR_BACKEND STREQUAL "vita")
     SceCtrl_stub SceTouch_stub SceAudio_stub
     vitaGL vitashark SceShaccCgExt mathneon taihen_stub SceShaccCg_stub
     SceKernelDmacMgr_stub SceGxm_stub SceDisplay_stub SceAppMgr_stub
-    SceCommonDialog_stub SceSysmodule_stub SceIme_stub)
+    SceCommonDialog_stub SceSysmodule_stub SceIme_stub
+    stdc++)  # vitaGL contains C++
   target_link_libraries(vita_runtime PRIVATE m)
 endif()
 
