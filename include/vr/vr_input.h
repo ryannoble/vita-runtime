@@ -41,6 +41,10 @@ typedef struct {
 /* Fills *state with the current input. Zeroes it when no device is present. */
 void vr_input_poll(vr_input_state *state);
 
+/* Radius is clamped to 0..0.9; default 0.15. Applies to both sticks.
+ * Non-finite values restore the default. */
+void vr_input_set_deadzone(float radius);
+
 #ifdef __cplusplus
 }
 #endif
