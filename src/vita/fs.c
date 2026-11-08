@@ -78,7 +78,7 @@ vr_result vr_file_seek(vr_file *file, int64_t offset, vr_seek_origin origin)
 {
     static const int whence[] = { SCE_SEEK_SET, SCE_SEEK_CUR, SCE_SEEK_END };
 
-    if (!file || origin < VR_SEEK_SET || origin > VR_SEEK_END)
+    if (!file || (unsigned)origin > VR_SEEK_END)
         return VR_ERR_INVALID_ARG;
     return sceIoLseek(file->fd, (SceOff)offset, whence[origin]) >= 0 ? VR_OK : VR_ERR_IO;
 }
