@@ -232,6 +232,71 @@ static void test_lighting(IDirect3DDevice8 *dev)
     dev->SetRenderState(D3DRS_LIGHTING, FALSE);
 }
 
+// XYZB1: one blend weight between position and normal (skipped by the shim).
+static void test_blend_weight_fvf(IDirect3DDevice8 *dev)
+{
+    struct BVertex {
+        float x, y, z, w0;
+        D3DCOLOR color;
+    };
+    const DWORD fvf = D3DFVF_XYZB1 | D3DFVF_DIFFUSE;
+    const D3DCOLOR c = D3DCOLOR_XRGB(0, 255, 255);
+    const BVertex quad[4] = { { -1, 1, 0.5f, 0, c }, { 1, 1, 0.5f, 0, c },
+                              { -1, -1, 0.5f, 0, c }, { 1, -1, 0.5f, 0, c } };
+
+    dev->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+    dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+    dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+    dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+    CHECK(dev->SetVertexShader(fvf) == D3D_OK);
+    CHECK(dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(BVertex)) == D3D_OK);
+    read_all();
+    CHECK(px_is(20, 20, 0, 255, 255));
+}
+
+// Normals follow the inverse transpose of the world matrix: under a uniform
+// world scale of 2 an unnormalized normal halves in length, as in D3D.
+static void test_scaled_world_lighting(IDirect3DDevice8 *dev)
+{
+    D3DLIGHT8 light;
+    D3DMATERIAL8 mat;
+    D3DMATRIX world, id;
+    const LVertex quad[4] = { { -0.5f, 0.5f, 0.5f, 0, 0, -1 }, { 0.5f, 0.5f, 0.5f, 0, 0, -1 },
+                              { -0.5f, -0.5f, 0.5f, 0, 0, -1 }, { 0.5f, -0.5f, 0.5f, 0, 0, -1 } };
+
+    memset(&light, 0, sizeof(light));
+    light.Type = D3DLIGHT_DIRECTIONAL;
+    light.Diffuse.r = light.Diffuse.g = light.Diffuse.b = 1.0f;
+    light.Direction.z = 1.0f;
+    memset(&mat, 0, sizeof(mat));
+    mat.Diffuse.r = mat.Diffuse.g = mat.Diffuse.b = mat.Diffuse.a = 1.0f;
+    memset(&world, 0, sizeof(world));
+    world._11 = world._22 = 2.0f;
+    world._33 = 2.0f;
+    world._44 = 1.0f;
+    world._43 = -0.5f; /* keep z = 0.5 after scaling */
+    dev->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+    dev->SetRenderState(D3DRS_LIGHTING, TRUE);
+    dev->SetRenderState(D3DRS_AMBIENT, 0);
+    dev->SetLight(0, &light);
+    dev->LightEnable(0, TRUE);
+    dev->SetMaterial(&mat);
+    dev->SetTransform(D3DTS_WORLD, &world);
+    dev->SetVertexShader(kLFVF);
+    CHECK(dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(LVertex)) == D3D_OK);
+    read_all();
+    CHECK(px_is(32, 24, 128, 128, 128));
+    memset(&id, 0, sizeof(id));
+    id._11 = id._22 = id._33 = id._44 = 1.0f;
+    dev->SetTransform(D3DTS_WORLD, &id);
+    dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+
+    // Huge light indices are rejected rather than overflowing.
+    CHECK(dev->SetLight(0xFFFFFFFFu, &light) == D3DERR_INVALIDCALL);
+    CHECK(dev->LightEnable(0xFFFFFFFFu, TRUE) == D3DERR_INVALIDCALL);
+}
+
 static void test_state_and_transform(IDirect3DDevice8 *dev)
 {
     DWORD v = 0;
@@ -284,6 +349,8 @@ int main()
     test_texture(dev);
     test_indexed_buffers(dev);
     test_lighting(dev);
+    test_blend_weight_fvf(dev);
+    test_scaled_world_lighting(dev);
     dev->EndScene();
     CHECK(dev->Present(NULL, NULL, NULL, NULL) == D3D_OK);
 

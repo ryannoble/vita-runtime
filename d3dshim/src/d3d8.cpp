@@ -18,6 +18,7 @@ extern "C" {
 namespace {
 
 const int kStages = 8;
+const DWORD kMaxLights = 1024; /* D3D8 allows any index; cap to bound memory */
 
 float dw2f(DWORD v)
 {
@@ -348,7 +349,7 @@ bool decode_fvf(DWORD fvf, FvfInfo *f)
     } else if (pos == D3DFVF_XYZ) {
         off = 12;
     } else if (pos >= D3DFVF_XYZB1 && pos <= D3DFVF_XYZB5) {
-        off = 12 + 4 * ((pos - D3DFVF_XYZ) / 2); /* blend weights are skipped */
+        off = 12 + 4 * ((pos - D3DFVF_XYZRHW) / 2); /* 1..5 blend weights, skipped */
     } else {
         return false;
     }
@@ -584,7 +585,7 @@ public:
 
     HRESULT SetLight(DWORD i, const D3DLIGHT8 *l) override
     {
-        if (!l)
+        if (!l || i >= kMaxLights)
             return D3DERR_INVALIDCALL;
         if (i >= lights_.size())
             lights_.resize(i + 1, Light{ default_light(), false });
@@ -600,6 +601,8 @@ public:
     }
     HRESULT LightEnable(DWORD i, BOOL enable) override
     {
+        if (i >= kMaxLights)
+            return D3DERR_INVALIDCALL;
         if (i >= lights_.size())
             lights_.resize(i + 1, Light{ default_light(), false });
         lights_[i].enabled = enable != 0;
@@ -997,6 +1000,9 @@ void Device::reset_state(bool depth)
     rs_[D3DRS_FOGSTART] = f2dw(0.0f);
     rs_[D3DRS_FOGEND] = f2dw(1.0f);
     rs_[D3DRS_FOGDENSITY] = f2dw(1.0f);
+    rs_[D3DRS_STENCILFAIL] = 1; /* D3DSTENCILOP_KEEP */
+    rs_[D3DRS_STENCILZFAIL] = 1;
+    rs_[D3DRS_STENCILPASS] = 1;
     rs_[D3DRS_STENCILFUNC] = D3DCMP_ALWAYS;
     rs_[D3DRS_STENCILMASK] = 0xFFFFFFFF;
     rs_[D3DRS_STENCILWRITEMASK] = 0xFFFFFFFF;
@@ -1031,6 +1037,7 @@ void Device::reset_state(bool depth)
         tss_[s][D3DTSS_MAGFILTER] = D3DTEXF_POINT;
         tss_[s][D3DTSS_MINFILTER] = D3DTEXF_POINT;
         tss_[s][D3DTSS_MIPFILTER] = D3DTEXF_NONE;
+        tss_[s][D3DTSS_MAXANISOTROPY] = 1;
     }
     identity(&world_);
     identity(&view_);
@@ -1242,6 +1249,28 @@ V3 xform_point(const D3DMATRIX &m, V3 p)
               p.x * m._13 + p.y * m._23 + p.z * m._33 + m._43);
 }
 
+// Normal matrix: inverse transpose of the upper 3x3 (row-vector convention).
+// Returns false for a singular matrix.
+bool normal_matrix(const D3DMATRIX &m, float out[9])
+{
+    float a = m._11, b = m._12, c = m._13, d = m._21, e = m._22, f = m._23, g = m._31, h = m._32,
+          i = m._33;
+    float det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (fabsf(det) < 1e-20f)
+        return false;
+    // (M^-1)^T = cofactor(M) / det
+    out[0] = (e * i - f * h) / det;
+    out[1] = (f * g - d * i) / det;
+    out[2] = (d * h - e * g) / det;
+    out[3] = (c * h - b * i) / det;
+    out[4] = (a * i - c * g) / det;
+    out[5] = (b * g - a * h) / det;
+    out[6] = (b * f - c * e) / det;
+    out[7] = (c * d - a * f) / det;
+    out[8] = (a * e - b * d) / det;
+    return true;
+}
+
 V3 xform_dir(const D3DMATRIX &m, V3 d)
 {
     return v3(d.x * m._11 + d.y * m._21 + d.z * m._31,
@@ -1287,6 +1316,8 @@ void Device::light_vertices(const FvfInfo &f, const uint8_t *src, UINT stride, U
     bool specular = rs_[D3DRS_SPECULARENABLE] != 0;
     bool normalize = rs_[D3DRS_NORMALIZENORMALS] != 0;
     bool color_vertex = rs_[D3DRS_COLORVERTEX] != 0;
+    float nm[9];
+    bool have_nm = normal_matrix(world_, nm);
     {
         float g[4];
         argb_to_rgba(rs_[D3DRS_AMBIENT], g);
@@ -1310,7 +1341,12 @@ void Device::light_vertices(const FvfInfo &f, const uint8_t *src, UINT stride, U
         p = xform_point(world_, p);
         if (f.has_normal) {
             memcpy(&nrm, vtx + f.normal, 12);
-            nrm = xform_dir(world_, nrm);
+            if (have_nm)
+                nrm = v3(nrm.x * nm[0] + nrm.y * nm[3] + nrm.z * nm[6],
+                         nrm.x * nm[1] + nrm.y * nm[4] + nrm.z * nm[7],
+                         nrm.x * nm[2] + nrm.y * nm[5] + nrm.z * nm[8]);
+            else
+                nrm = xform_dir(world_, nrm);
             if (normalize)
                 nrm = norm(nrm);
         }
@@ -1417,7 +1453,7 @@ HRESULT Device::draw(D3DPRIMITIVETYPE type, UINT prims, const uint8_t *vdata, si
         return D3DERR_INVALIDCALL;
     if (!count)
         return D3D_OK;
-    if ((size_t)(base_vertex + vcount) * stride > vsize)
+    if (((uint64_t)base_vertex + vcount) * stride > (uint64_t)vsize)
         return D3DERR_INVALIDCALL;
     build_state(f, &rs, coord_set);
 

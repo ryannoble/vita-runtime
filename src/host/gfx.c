@@ -358,6 +358,16 @@ static int address(vr_address mode, int i, int size)
     }
 }
 
+/* Float to texel index without undefined behaviour for huge/NaN values. */
+static int to_index(float v)
+{
+    if (!(v > -16777216.0f))
+        return v != v ? 0 : -16777216;
+    if (v > 16777216.0f)
+        return 16777216;
+    return (int)floorf(v);
+}
+
 static void texel(const vr_texture *t, int level, const vr_texture_stage *st, int x, int y,
                   float out[4])
 {
@@ -379,10 +389,10 @@ static void sample_level(const vr_texture *t, int level, const vr_texture_stage 
     float x = u * (float)w, y = v * (float)h;
 
     if (filter == VR_FILTER_NEAREST) {
-        texel(t, level, st, (int)floorf(x), (int)floorf(y), out);
+        texel(t, level, st, to_index(x), to_index(y), out);
     } else {
         float fx = x - 0.5f, fy = y - 0.5f;
-        int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
+        int x0 = to_index(fx), y0 = to_index(fy);
         float ax = fx - (float)x0, ay = fy - (float)y0;
         float a[4], b[4], c[4], d[4];
         int i;
@@ -652,10 +662,17 @@ static void raster_triangle(const vr_render_state *rs, const scr_vtx *a, const s
     maxx = fmaxf(v[0]->sx, fmaxf(v[1]->sx, v[2]->sx));
     miny = fminf(v[0]->sy, fminf(v[1]->sy, v[2]->sy));
     maxy = fmaxf(v[0]->sy, fmaxf(v[1]->sy, v[2]->sy));
-    x0 = minx < (float)g.vp_x ? g.vp_x : (int)floorf(minx);
-    y0 = miny < (float)g.vp_y ? g.vp_y : (int)floorf(miny);
-    x1 = maxx > (float)(g.vp_x + g.vp_w - 1) ? g.vp_x + g.vp_w - 1 : (int)ceilf(maxx);
-    y1 = maxy > (float)(g.vp_y + g.vp_h - 1) ? g.vp_y + g.vp_h - 1 : (int)ceilf(maxy);
+    /* Clamp in float before converting so huge or NaN bounds stay defined. */
+    minx = fmaxf(minx, (float)g.vp_x);
+    miny = fmaxf(miny, (float)g.vp_y);
+    maxx = fminf(maxx, (float)(g.vp_x + g.vp_w - 1));
+    maxy = fminf(maxy, (float)(g.vp_y + g.vp_h - 1));
+    if (!(minx <= maxx) || !(miny <= maxy))
+        return;
+    x0 = (int)floorf(minx);
+    y0 = (int)floorf(miny);
+    x1 = (int)ceilf(maxx);
+    y1 = (int)ceilf(maxy);
 
     for (y = y0; y <= y1; y++) {
         for (x = x0; x <= x1; x++) {
@@ -709,8 +726,13 @@ static void raster_point(const vr_render_state *rs, const scr_vtx *a)
 {
     static const float zero_duv[2][4];
     float var[NVAR], w = a->inv_w != 0.0f ? 1.0f / a->inv_w : 0.0f;
-    int x = (int)floorf(a->sx), y = (int)floorf(a->sy), i;
+    int x, y, i;
 
+    if (!(a->sx >= (float)g.vp_x && a->sx < (float)(g.vp_x + g.vp_w) &&
+          a->sy >= (float)g.vp_y && a->sy < (float)(g.vp_y + g.vp_h)))
+        return;
+    x = (int)floorf(a->sx);
+    y = (int)floorf(a->sy);
     if (!in_viewport(x, y))
         return;
     for (i = 0; i < NVAR; i++)
@@ -721,17 +743,44 @@ static void raster_point(const vr_render_state *rs, const scr_vtx *a)
 static void raster_line(const vr_render_state *rs, const scr_vtx *a, const scr_vtx *b)
 {
     static const float zero_duv[2][4];
-    float dx = b->sx - a->sx, dy = b->sy - a->sy;
-    int steps = (int)ceilf(fmaxf(fabsf(dx), fabsf(dy))), s, i;
+    double dx = (double)b->sx - a->sx, dy = (double)b->sy - a->sy;
+    double len = fmax(fabs(dx), fabs(dy)), t0 = 0.0, t1 = 1.0;
+    double lo[2] = { g.vp_x - 1.0, g.vp_y - 1.0 }, hi[2] = { g.vp_x + g.vp_w + 1.0, g.vp_y + g.vp_h + 1.0 };
+    double p0[2] = { a->sx, a->sy }, d[2] = { dx, dy };
+    double steps, s, s_end;
+    int k, i;
 
-    for (s = 0; s < steps; s++) { /* last pixel excluded, like D3D */
-        float t = ((float)s + 0.5f) / (float)steps;
+    if (!(len >= 1.0) || !isfinite(len))
+        return;
+    /* Liang-Barsky clip of the parameter range to (just beyond) the viewport,
+     * so only on-screen steps are visited. */
+    for (k = 0; k < 2; k++) {
+        if (d[k] == 0.0) {
+            if (p0[k] < lo[k] || p0[k] > hi[k])
+                return;
+            continue;
+        }
+        double ta = (lo[k] - p0[k]) / d[k], tb = (hi[k] - p0[k]) / d[k];
+        if (ta > tb) { double tmp = ta; ta = tb; tb = tmp; }
+        t0 = fmax(t0, ta);
+        t1 = fmin(t1, tb);
+    }
+    if (!(t0 < t1))
+        return;
+    steps = ceil(len);
+    s_end = fmin(steps, ceil(t1 * steps));
+    for (s = fmax(0.0, floor(t0 * steps)); s < s_end; s += 1.0) { /* last pixel excluded */
+        double td = (s + 0.5) / steps;
+        float t = (float)td;
         float iw = a->inv_w + (b->inv_w - a->inv_w) * t, w = iw != 0.0f ? 1.0f / iw : 0.0f;
         float var[NVAR];
-        int x = (int)floorf(a->sx + dx * t), y = (int)floorf(a->sy + dy * t);
+        double fx = a->sx + dx * td, fy = a->sy + dy * td;
+        int x, y;
 
-        if (!in_viewport(x, y))
+        if (!(fx >= g.vp_x && fx < g.vp_x + g.vp_w && fy >= g.vp_y && fy < g.vp_y + g.vp_h))
             continue;
+        x = (int)floor(fx);
+        y = (int)floor(fy);
         for (i = 0; i < NVAR; i++)
             var[i] = (a->var[i] + (b->var[i] - a->var[i]) * t) * w;
         shade_pixel(rs, x, y, a->sz + (b->sz - a->sz) * t, var, zero_duv);

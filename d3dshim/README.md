@@ -40,8 +40,11 @@ and the shim scales them to the real display.
 - Pretransformed vertices (`D3DFVF_XYZRHW`) are scaled with the same factors
   when drawn (`screen_scale` in `vr_gfx`).
 - Direct3D 8 puts pixel centres on integer coordinates, while `vr_gfx` samples
-  at `x + 0.5`. The shim passes a `screen_offset` of -0.5 (scaled) so that a
-  quad drawn at integer coordinates covers the same pixels as in D3D.
+  at `x + 0.5`. The shim passes a `screen_offset` of +0.5 so that a D3D
+  coordinate of 0 lands on the centre of pixel 0. For pretransformed vertices
+  the offset is half a virtual pixel (0.5 × scale), so 2D quads cover whole
+  scaled pixels. For transformed geometry it is half a real pixel, which keeps
+  viewport edges covered when scaling. The two are the same at 1:1.
 - A back-buffer size of 0 means "use the real size".
 - `GetAdapterDisplayMode` reports 960x544 at 60 Hz, `D3DFMT_X8R8G8B8`.
 

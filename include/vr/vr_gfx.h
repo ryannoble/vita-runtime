@@ -274,7 +274,10 @@ typedef struct {
 
     /* Indexed when index_count > 0: from index_buffer + index_offset, or
      * index_data when index_buffer is NULL. Otherwise vertices are drawn
-     * in order and vertex_count gives the number used. */
+     * in order and vertex_count gives the number used. Every index must be
+     * below vertex_count. Draws with out-of-range indices fail with
+     * VR_ERR_INVALID_ARG, except that GPU backends cannot check indices held
+     * in an index buffer: the caller must keep those in range. */
     const vr_buffer *index_buffer;
     size_t           index_offset;
     const void      *index_data;
