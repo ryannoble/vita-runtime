@@ -29,7 +29,8 @@ add_library(vita_runtime
 target_include_directories(vita_runtime PUBLIC include)
 if(VR_BACKEND STREQUAL "vita")
   target_link_libraries(vita_runtime PUBLIC
-    SceLibKernel_stub SceIofilemgr_stub SceKernelThreadMgr_stub)
+    SceLibKernel_stub SceIofilemgr_stub SceKernelThreadMgr_stub
+    SceCtrl_stub SceTouch_stub)
   target_link_libraries(vita_runtime PRIVATE m)
 endif()
 

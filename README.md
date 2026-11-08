@@ -12,8 +12,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 | Module                        | Host backend    | Vita backend |
 | ----------------------------- | --------------- | ------------ |
 | `vr_platform` (time, logging) | done            | implemented; hardware validation pending |
-| `vr_fs` (read-only files)     | done            | planned      |
-| `vr_input` (pad, touch)       | headless or SDL2 gamepad | planned      |
+| `vr_fs` (read-only files)     | done            | implemented; hardware validation pending |
+| `vr_input` (pad, touch)       | headless or SDL2 gamepad | implemented; hardware validation pending |
 | `vr_gfx` (GXM)                | planned         | planned      |
 | `vr_audio`                    | planned         | planned      |
 | Direct3D 8/9 shim             | planned         | planned      |
@@ -45,7 +45,7 @@ cmake --build build-vita
 
 This builds `libvita_runtime.a`. Add `-DVR_BUILD_SAMPLES=ON` to also link the
 `vr_platform_smoke` ELF, which exercises platform timing, logging, and the
-filesystem/input placeholders. It also builds and runs on the host. See
+filesystem and input backends. It also builds and runs on the host. See
 [src/vita/README.md](src/vita/README.md) for behavior and remaining limitations.
 
 ## Using it from a port

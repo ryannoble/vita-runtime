@@ -16,13 +16,22 @@ available. Records are bounded to 2047 bytes including the newline. Shutdown
 closes the log handle. Sleep requests larger than the SDK's 32-bit argument are
 split into chunks.
 
-Filesystem calls are placeholders returning `VR_ERR_UNSUPPORTED` (tell/size:
-`-1`), and input polling returns a zeroed state. These are issues #2 and #3;
-building the library does not imply these capabilities are implemented.
+The filesystem backend uses `sceIoOpen`/`sceIoRead`/`sceIoLseek`/`sceIoClose`
+and matches the host behavior: unsafe or over-long paths return
+`VR_ERR_INVALID_ARG`, open failures return `VR_ERR_NOT_FOUND`, read errors
+return `VR_ERR_IO`, short reads are retried until the request is filled or end
+of file, and `vr_file_size()` restores the current position.
+
+The input backend initializes lazily on the first `vr_input_poll()`: analog-wide
+sampling, and touch sampling on both panels. Sticks map 0..255 to -1..1 (up is
+negative Y) and go through the shared radial deadzone (`src/input_common.c`).
+Touch points (at most `VR_MAX_TOUCHES` per panel) are normalized to 0..1 using
+each panel's active area from `sceTouchGetPanelInfo`. Links `SceCtrl_stub` and
+`SceTouch_stub`.
 
 Configure with `-DVR_BUILD_SAMPLES=ON` to link `vr_platform_smoke`. On Vita its
 log should appear at `ux0:data/vr-platform-smoke/log.txt`, report at least 2000
-microseconds elapsed, file result `-5`, and zero buttons. The sample is an ELF;
+microseconds elapsed, file result `-2` (not found), and the buttons held at launch. The sample is an ELF;
 SELF/VPK packaging is left to the consuming application. Cross-compilation and
 linking have been checked; on-device timing and persistent logging still require
 hardware validation.
