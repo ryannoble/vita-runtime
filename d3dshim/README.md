@@ -83,10 +83,24 @@ lit.
   come from the material or from the vertex colour 1 (diffuse) or 2 (specular)
   via `D3DRS_*MATERIALSOURCE`, when `D3DRS_COLORVERTEX` is `TRUE` and the
   vertex has that colour. Otherwise the material is used.
-- `D3DRS_NORMALIZENORMALS` is honoured. Normals are transformed by the world
-  matrix only (no inverse transpose).
+- `D3DRS_NORMALIZENORMALS` is honoured. Normals are transformed by the
+  inverse transpose of the world matrix, as in Direct3D.
+- The default material is all zeros, as in Direct3D. With the default
+  `D3DRS_DIFFUSEMATERIALSOURCE` (`D3DMCS_COLOR1`), vertices with a diffuse
+  colour still get it lit, while vertices without one stay black until the
+  application calls `SetMaterial`.
 - Only the first two texture coordinate sets referenced by stages 0 and 1 are
   passed through, and only their first two components.
+
+### Reference counting
+
+Counts follow Direct3D 8 (as checked by Wine's conformance tests):
+
+- Every texture or buffer holds a reference to its device, so the device is
+  destroyed only after its last resource is released, in any order.
+- `SetTexture`, `SetStreamSource` and `SetIndices` do not change a resource's
+  count. A resource released while bound stays usable and is freed when it is
+  unbound or the device is destroyed. `Get*` calls return an extra reference.
 
 ## Not supported yet
 

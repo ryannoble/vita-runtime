@@ -297,6 +297,135 @@ static void test_scaled_world_lighting(IDirect3DDevice8 *dev)
     CHECK(dev->LightEnable(0xFFFFFFFFu, TRUE) == D3DERR_INVALIDCALL);
 }
 
+static unsigned long refcount(IUnknown *o)
+{
+    o->AddRef();
+    return o->Release();
+}
+
+// Reference counting as in Direct3D 8 (and Wine's conformance tests):
+// resources hold a device reference, binding does not change public counts,
+// and a resource released while bound stays usable until unbound.
+static void test_refcounts(IDirect3DDevice8 *dev)
+{
+    IDirect3DVertexBuffer8 *vb = NULL;
+    IDirect3DTexture8 *tex = NULL;
+    IDirect3DDevice8 *got = NULL;
+    IDirect3DBaseTexture8 *bound = NULL;
+    D3DLOCKED_RECT lr;
+    TLVertex v[4];
+    unsigned long base = refcount(dev);
+
+    CHECK(dev->CreateVertexBuffer(64, 0, kCFVF, D3DPOOL_MANAGED, &vb) == D3D_OK);
+    CHECK(refcount(dev) == base + 1);
+    CHECK(dev->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex) == D3D_OK);
+    CHECK(refcount(dev) == base + 2);
+    CHECK(refcount(vb) == 1 && refcount(tex) == 1);
+
+    CHECK(dev->SetStreamSource(0, vb, sizeof(CVertex)) == D3D_OK);
+    CHECK(refcount(vb) == 1);
+    CHECK(dev->SetTexture(0, tex) == D3D_OK);
+    CHECK(refcount(tex) == 1);
+    CHECK(dev->GetTexture(0, &bound) == D3D_OK && bound == tex && refcount(tex) == 2);
+    bound->Release();
+    CHECK(tex->GetDevice(&got) == D3D_OK && got == dev && refcount(dev) == base + 3);
+    got->Release();
+
+    // Release the bound texture: it must keep working until unbound.
+    tex->LockRect(0, &lr, NULL, 0);
+    *(uint32_t *)lr.pBits = 0xFF00FF00u;
+    tex->UnlockRect(0);
+    CHECK(tex->Release() == 0);
+    CHECK(refcount(dev) == base + 1);
+    dev->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+    dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    dev->SetVertexShader(kTLFVF);
+    tl_quad(v, 0, 0, 4, 4, 0xFFFFFFFFu);
+    CHECK(dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(TLVertex)) == D3D_OK);
+    read_all();
+    CHECK(px_is(2, 2, 0, 255, 0));
+    // Getting it back from the binding revives a public reference.
+    CHECK(dev->GetTexture(0, &bound) == D3D_OK && bound && refcount(bound) == 1);
+    CHECK(refcount(dev) == base + 2);
+    CHECK(bound->Release() == 0);
+    dev->SetTexture(0, NULL); /* now actually freed (LeakSanitizer checks) */
+    dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+
+    dev->SetStreamSource(0, NULL, 0);
+    CHECK(refcount(vb) == 1);
+    CHECK(vb->Release() == 0);
+    CHECK(refcount(dev) == base);
+}
+
+// Never calling SetMaterial leaves an all-zero material, as in Direct3D:
+// lit geometry without vertex colours is black, while vertex colours still
+// drive diffuse through the default D3DRS_DIFFUSEMATERIALSOURCE = COLOR1.
+static void test_default_material(IDirect3D8 *d3d)
+{
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3DDevice8 *dev = NULL;
+    D3DMATERIAL8 mat;
+    D3DLIGHT8 light;
+    const LVertex plain[4] = { { -1, 1, 0.5f, 0, 0, -1 }, { 1, 1, 0.5f, 0, 0, -1 },
+                               { -1, -1, 0.5f, 0, 0, -1 }, { 1, -1, 0.5f, 0, 0, -1 } };
+    struct NCVertex {
+        float x, y, z, nx, ny, nz;
+        D3DCOLOR c;
+    };
+    const D3DCOLOR red = D3DCOLOR_XRGB(255, 0, 0);
+    const NCVertex colored[4] = { { -1, 1, 0.5f, 0, 0, -1, red }, { 1, 1, 0.5f, 0, 0, -1, red },
+                                  { -1, -1, 0.5f, 0, 0, -1, red }, { 1, -1, 0.5f, 0, 0, -1, red } };
+
+    memset(&pp, 0, sizeof(pp));
+    pp.BackBufferWidth = 32;
+    pp.BackBufferHeight = 24;
+    pp.EnableAutoDepthStencil = TRUE;
+    CHECK(d3d->CreateDevice(0, D3DDEVTYPE_HAL, NULL, 0, &pp, &dev) == D3D_OK);
+    if (!dev)
+        return;
+    CHECK(dev->GetMaterial(&mat) == D3D_OK);
+    CHECK(mat.Diffuse.r == 0 && mat.Diffuse.a == 0 && mat.Ambient.g == 0 && mat.Power == 0);
+
+    memset(&light, 0, sizeof(light));
+    light.Type = D3DLIGHT_DIRECTIONAL;
+    light.Diffuse.r = light.Diffuse.g = light.Diffuse.b = 1.0f;
+    light.Direction.z = 1.0f;
+    dev->SetLight(0, &light);
+    dev->LightEnable(0, TRUE);
+    dev->SetVertexShader(kLFVF);
+    dev->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_XRGB(0, 0, 255), 1.0f, 0);
+    dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, plain, sizeof(LVertex));
+    read_all();
+    CHECK(px_is(20, 20, 0, 0, 0));
+    dev->SetVertexShader(D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE);
+    dev->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+    dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, colored, sizeof(NCVertex));
+    read_all();
+    CHECK(px_is(20, 20, 255, 0, 0));
+    CHECK(dev->Release() == 0);
+}
+
+// Releasing the device first is legal: it lives until its last resource goes.
+static void test_device_outlived(IDirect3D8 *d3d)
+{
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3DDevice8 *dev = NULL, *got = NULL;
+    IDirect3DIndexBuffer8 *ib = NULL;
+
+    memset(&pp, 0, sizeof(pp));
+    CHECK(d3d->CreateDevice(0, D3DDEVTYPE_HAL, NULL, 0, &pp, &dev) == D3D_OK);
+    if (!dev)
+        return;
+    CHECK(dev->CreateIndexBuffer(12, 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &ib) == D3D_OK);
+    CHECK(dev->SetIndices(ib, 0) == D3D_OK);
+    CHECK(dev->Release() == 1); /* still held by the index buffer */
+    CHECK(ib->GetDevice(&got) == D3D_OK && got == dev);
+    CHECK(got->Release() == 1);
+    CHECK(ib->Release() == 0); /* frees the device, which drops its binding */
+}
+
 static void test_state_and_transform(IDirect3DDevice8 *dev)
 {
     DWORD v = 0;
@@ -354,7 +483,10 @@ int main()
     dev->EndScene();
     CHECK(dev->Present(NULL, NULL, NULL, NULL) == D3D_OK);
 
+    test_refcounts(dev);
     CHECK(dev->Release() == 0);
+    test_default_material(d3d);
+    test_device_outlived(d3d);
     CHECK(d3d->Release() == 0);
     vr_gfx_shutdown();
     if (g_failures) {
