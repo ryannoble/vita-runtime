@@ -88,26 +88,50 @@ bool map_format(D3DFORMAT f, vr_format *out)
 }
 
 class Device;
+void device_ref(Device *dev, bool add); /* AddRef/Release; defined after Device */
 
 // ---- Resources -----------------------------------------------------------------------
 
 template <class Base>
 class Resource : public Base {
 public:
-    explicit Resource(Device *dev) : refs_(1), device_(dev) {}
+    // Reference counting follows Direct3D 8: every public reference to a
+    // resource keeps one reference on its device, so the device lives until
+    // its last resource is released. Device bindings (SetTexture and so on)
+    // are counted separately in binds_ and do not change the public count; a
+    // resource released while bound is freed when it is unbound.
+    explicit Resource(Device *dev) : refs_(1), device_(dev) { device_ref(dev, true); }
     HRESULT QueryInterface(REFIID, void **ppv) override
     {
         if (ppv)
             *ppv = nullptr;
         return E_NOINTERFACE;
     }
-    unsigned long AddRef() override { return ++refs_; }
+    unsigned long AddRef() override
+    {
+        if (refs_++ == 0)
+            device_ref(device_, true); /* revived through a device binding */
+        return refs_;
+    }
     unsigned long Release() override
     {
+        if (!refs_)
+            return 0;
         unsigned long r = --refs_;
-        if (!r)
-            delete this;
+        if (!r) {
+            // Dropping the device reference may destroy the device, which
+            // unbinds this resource; hold a temporary binding meanwhile.
+            binds_++;
+            device_ref(device_, false);
+            unbind();
+        }
         return r;
+    }
+    void bind() { binds_++; }
+    void unbind()
+    {
+        if (--binds_ == 0 && refs_ == 0)
+            delete this;
     }
     HRESULT GetDevice(IDirect3DDevice8 **ppDevice) override;
     DWORD SetPriority(DWORD p) override
@@ -121,6 +145,7 @@ public:
 
 protected:
     unsigned long refs_;
+    unsigned long binds_ = 0;
     Device *device_;
     DWORD priority_ = 0;
 };
@@ -644,11 +669,12 @@ public:
     {
         if (stage >= (DWORD)kStages)
             return D3DERR_INVALIDCALL;
-        if (t)
-            t->AddRef();
+        Texture *tex = static_cast<Texture *>(t); /* the shim creates every texture */
+        if (tex)
+            tex->bind();
         if (textures_[stage])
-            textures_[stage]->Release();
-        textures_[stage] = t;
+            textures_[stage]->unbind();
+        textures_[stage] = tex;
         return D3D_OK;
     }
     HRESULT GetTextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD *v) override
@@ -734,11 +760,12 @@ public:
             warn_once(warned_streams_, "vertex streams other than 0");
             return D3DERR_INVALIDCALL;
         }
-        if (vb)
-            vb->AddRef();
+        VertexBuffer *buf = static_cast<VertexBuffer *>(vb);
+        if (buf)
+            buf->bind();
         if (stream_)
-            stream_->Release();
-        stream_ = static_cast<VertexBuffer *>(vb);
+            stream_->unbind();
+        stream_ = buf;
         stride_ = stride;
         return D3D_OK;
     }
@@ -754,11 +781,12 @@ public:
     }
     HRESULT SetIndices(IDirect3DIndexBuffer8 *ib, UINT base) override
     {
-        if (ib)
-            ib->AddRef();
+        IndexBuffer *buf = static_cast<IndexBuffer *>(ib);
+        if (buf)
+            buf->bind();
         if (indices_)
-            indices_->Release();
-        indices_ = static_cast<IndexBuffer *>(ib);
+            indices_->unbind();
+        indices_ = buf;
         base_vertex_ = base;
         return D3D_OK;
     }
@@ -857,7 +885,7 @@ private:
     Direct3D *d3d_;
     DWORD rs_[256];
     DWORD tss_[kStages][32];
-    IDirect3DBaseTexture8 *textures_[kStages] = {};
+    Texture *textures_[kStages] = {};
     D3DMATRIX world_, view_, proj_, tex_[8];
     D3DVIEWPORT8 vp_;
     D3DMATERIAL8 material_;
@@ -945,6 +973,14 @@ private:
     unsigned long refs_ = 1;
 };
 
+void device_ref(Device *dev, bool add)
+{
+    if (add)
+        dev->AddRef();
+    else
+        dev->Release();
+}
+
 template <class Base>
 HRESULT Resource<Base>::GetDevice(IDirect3DDevice8 **ppDevice)
 {
@@ -966,11 +1002,11 @@ Device::~Device()
 {
     for (int i = 0; i < kStages; i++)
         if (textures_[i])
-            textures_[i]->Release();
+            textures_[i]->unbind();
     if (stream_)
-        stream_->Release();
+        stream_->unbind();
     if (indices_)
-        indices_->Release();
+        indices_->unbind();
     d3d_->Release();
 }
 
