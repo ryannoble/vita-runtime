@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "vr/vr_gfx.h"
+#include "vr/vr_platform.h"
 #include "gfx_internal.h"
 
 static int g_failures;
@@ -440,6 +441,33 @@ static void test_lines_points(void)
     CHECK(px_is(10, 10, 0, 255, 0, 255));
 }
 
+/* Enormous or non-finite coordinates must be clipped cheaply, not looped over. */
+static void test_huge_coordinates(void)
+{
+    vr_render_state rs;
+    tl_vertex tri[3], line[2];
+    uint64_t t0 = vr_time_us();
+
+    untextured(&rs);
+    rs.cull = VR_CULL_NONE;
+    clear(0, 0, 0, 1);
+    tri[0] = tv(-1e10f, -1e10f, 0.5f, 0xFFFFFFFFu, 0, 0);
+    tri[1] = tv(2e10f, -1e10f, 0.5f, 0xFFFFFFFFu, 0, 0);
+    tri[2] = tv(-1e10f, 2e10f, 0.5f, 0xFFFFFFFFu, 0, 0);
+    CHECK(draw_tl(tri, 3, VR_PRIM_TRIANGLE_LIST, &rs) == VR_OK);
+    read_all();
+    CHECK(px_is(8, 8, 255, 255, 255, 255)); /* covers the whole target */
+    rs.depth_test_enable = 0; /* the huge triangle's depth is only ~0.5 */
+    line[0] = tv(-3e9f, 4.5f, 0.5f, 0xFF00FF00u, 1e20f, 0);
+    line[1] = tv(3e9f, 4.5f, 0.5f, 0xFF00FF00u, NAN, 0);
+    CHECK(draw_tl(line, 2, VR_PRIM_LINE_LIST, &rs) == VR_OK);
+    read_all();
+    CHECK(px_is(8, 4, 0, 255, 0, 255));
+    line[0] = tv(NAN, 1e30f, 0.5f, 0xFF00FF00u, 0, 0);
+    CHECK(draw_tl(line, 1, VR_PRIM_POINT_LIST, &rs) == VR_OK);
+    CHECK(vr_time_us() - t0 < 2000000u);
+}
+
 int main(void)
 {
     vr_gfx_desc desc = { W, H, 0 };
@@ -461,6 +489,7 @@ int main(void)
     test_near_clip();
     test_strip_fan();
     test_lines_points();
+    test_huge_coordinates();
     vr_gfx_end_frame();
     vr_gfx_shutdown();
 

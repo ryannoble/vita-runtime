@@ -38,7 +38,7 @@ struct vr_texture {
 /* Everything that changes generated shader code. Zero-initialised and
  * compared with memcmp, so it must have no padding-dependent content. */
 typedef struct {
-    uint8_t pretransformed, c0_bgra, c1_bgra;
+    uint8_t pretransformed, pos_w1, c0_bgra, c1_bgra;
     uint8_t stages; /* active stages */
     uint8_t color_op[VR_MAX_TEXTURE_STAGES], alpha_op[VR_MAX_TEXTURE_STAGES];
     uint8_t color_arg[VR_MAX_TEXTURE_STAGES][2], alpha_arg[VR_MAX_TEXTURE_STAGES][2];
@@ -180,11 +180,11 @@ vr_result vr_gfx_read_pixels(int x, int y, int width, int height, void *rgba8)
     if (!rgba8 || x < 0 || y < 0 || width <= 0 || height <= 0 ||
         x + width > g.width || y + height > g.height)
         return VR_ERR_INVALID_ARG;
-    glReadPixels(x, g.height - y - height, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba8);
-    /* GL returns the bottom row first; flip to top row first. */
     row = malloc(pitch);
     if (!row)
         return VR_ERR_NO_MEMORY;
+    glReadPixels(x, g.height - y - height, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba8);
+    /* GL returns the bottom row first; flip to top row first. */
     for (i = 0; i < height / 2; i++) {
         uint8_t *a = dst + (size_t)i * pitch, *b = dst + (size_t)(height - 1 - i) * pitch;
         memcpy(row, a, pitch);
@@ -377,7 +377,11 @@ static const char *const vertex_src =
     "{\n"
     "  float4 clip;\n"
     "#if PRETRANSFORMED\n"
+    "#if POS_W1\n"
+    "  float w = 1.0;\n"
+    "#else\n"
     "  float w = 1.0 / a_pos.w;\n"
+    "#endif\n"
     "  float2 sp = a_pos.xy * u_scale + u_off;\n"
     "  float2 ndc = float2((sp.x - u_vp.x) / u_vp.z * 2.0 - 1.0,\n"
     "                      1.0 - (sp.y - u_vp.y) / u_vp.w * 2.0);\n"
@@ -474,7 +478,7 @@ static GLuint compile(GLenum type, const char *defines, const char *body)
 static program_entry *get_program(const shader_key *key)
 {
     static const char *const attr_names[A_COUNT] = { "a_pos", "a_c0", "a_c1", "a_t0", "a_t1" };
-    char defines[128], *frag;
+    char defines[160], *frag;
     program_entry *e;
     GLuint vs, fs;
     int i;
@@ -493,8 +497,9 @@ static program_entry *get_program(const shader_key *key)
     if (!frag)
         return NULL;
     build_fragment(key, frag);
-    snprintf(defines, sizeof(defines), "#define PRETRANSFORMED %d\n#define C0_BGRA %d\n#define C1_BGRA %d\n",
-             key->pretransformed, key->c0_bgra, key->c1_bgra);
+    snprintf(defines, sizeof(defines),
+             "#define PRETRANSFORMED %d\n#define POS_W1 %d\n#define C0_BGRA %d\n#define C1_BGRA %d\n",
+             key->pretransformed, key->pos_w1, key->c0_bgra, key->c1_bgra);
     vs = compile(GL_VERTEX_SHADER, defines, vertex_src);
     fs = compile(GL_FRAGMENT_SHADER, "", frag);
     free(frag);
@@ -626,14 +631,15 @@ static void apply_state(const vr_render_state *rs)
     } else {
         glDisable(GL_DEPTH_TEST);
     }
-    /* VR winding is judged with y down; GL window space has y up, so a
-     * clockwise VR triangle is counter-clockwise (front facing) in GL. */
+    /* The image is not mirrored (NDC y up maps to the top of the screen), so
+     * a triangle that looks clockwise is clockwise in GL window space too.
+     * With CCW front faces, VR_CULL_CCW therefore culls GL front faces. */
     if (rs->cull == VR_CULL_NONE) {
         glDisable(GL_CULL_FACE);
     } else {
         glEnable(GL_CULL_FACE);
         glFrontFace(GL_CCW);
-        glCullFace(rs->cull == VR_CULL_CCW ? GL_BACK : GL_FRONT);
+        glCullFace(rs->cull == VR_CULL_CCW ? GL_FRONT : GL_BACK);
     }
     glColorMask((rs->color_write_mask & 1) ? GL_TRUE : GL_FALSE,
                 (rs->color_write_mask & 2) ? GL_TRUE : GL_FALSE,
@@ -648,8 +654,10 @@ static void make_key(const vr_draw_desc *d, const vr_render_state *rs, shader_ke
     memset(k, 0, sizeof(*k));
     for (i = 0; i < d->layout->count; i++) {
         const vr_vertex_attr *a = &d->layout->attrs[i];
-        if (a->semantic == VR_ATTR_POSITION_T)
+        if (a->semantic == VR_ATTR_POSITION_T) {
             k->pretransformed = 1;
+            k->pos_w1 = a->type != VR_ATTR_FLOAT4; /* rhw defaults to 1 */
+        }
         if (a->semantic == VR_ATTR_COLOR0 && a->type == VR_ATTR_UBYTE4_BGRA)
             k->c0_bgra = 1;
         if (a->semantic == VR_ATTR_COLOR1 && a->type == VR_ATTR_UBYTE4_BGRA)
@@ -740,6 +748,14 @@ vr_result vr_gfx_draw(const vr_draw_desc *d)
     count = d->index_count ? d->index_count : d->vertex_count;
     if (!vr__prim_count(d->primitive, count))
         return VR_OK;
+    /* The GPU does not range-check indices, so check CPU-side ones here (the
+     * host backend checks all). Buffer indices must be in range: see vr_gfx.h. */
+    if (d->index_count && !d->index_buffer) {
+        uint32_t k;
+        for (k = 0; k < d->index_count; k++)
+            if (vr__index_at(d, d->index_data, k) >= d->vertex_count)
+                return VR_ERR_INVALID_ARG;
+    }
 
     make_key(d, rs, &key);
     p = get_program(&key);
@@ -755,7 +771,10 @@ vr_result vr_gfx_draw(const vr_draw_desc *d)
                 (float)(g.vp_h ? g.vp_h : 1));
     glUniform2f(p->u_dr, g.vp_min_z,
                 g.vp_max_z != g.vp_min_z ? g.vp_max_z - g.vp_min_z : 1.0f);
-    glUniform1f(p->u_bias, rs->depth_bias);
+    /* depth_bias is in window depth units; the shader adds it before the
+     * depth-range remap, so divide by the range like the host applies it. */
+    glUniform1f(p->u_bias, rs->depth_bias /
+                (g.vp_max_z != g.vp_min_z ? g.vp_max_z - g.vp_min_z : 1.0f));
     glUniform2f(p->u_off, d->screen_offset[0], d->screen_offset[1]);
     glUniform2f(p->u_scale, d->screen_scale[0] != 0.0f ? d->screen_scale[0] : 1.0f,
                 d->screen_scale[1] != 0.0f ? d->screen_scale[1] : 1.0f);
@@ -797,8 +816,11 @@ vr_result vr_gfx_draw(const vr_draw_desc *d)
         if (enabled[i] || p->attr[i] < 0)
             continue;
         glDisableVertexAttribArray((GLuint)p->attr[i]);
+        /* Same defaults as the host: white diffuse, zero specular (alpha 0). */
         if (i == A_C0)
             glVertexAttrib4f((GLuint)p->attr[i], 1, 1, 1, 1);
+        else if (i == A_C1)
+            glVertexAttrib4f((GLuint)p->attr[i], 0, 0, 0, 0);
         else
             glVertexAttrib4f((GLuint)p->attr[i], 0, 0, 0, 1);
     }
