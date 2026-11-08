@@ -14,3 +14,8 @@ target_link_libraries(vr_gfx_tests PRIVATE vita_runtime)
 target_include_directories(vr_gfx_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME vr_gfx_tests COMMAND vr_gfx_tests)
 set_tests_properties(vr_gfx_tests PROPERTIES ENVIRONMENT VR_HEADLESS=1)
+
+add_executable(vr_audio_tests test_audio.c)
+target_link_libraries(vr_audio_tests PRIVATE vita_runtime)
+add_test(NAME vr_audio_tests COMMAND vr_audio_tests)
+set_tests_properties(vr_audio_tests PROPERTIES ENVIRONMENT VR_HEADLESS=1)

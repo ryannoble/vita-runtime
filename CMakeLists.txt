@@ -23,8 +23,10 @@ add_library(vita_runtime
   src/path.c
   src/input_common.c
   src/gfx_common.c
+  src/audio_common.c
   src/${VR_BACKEND}/platform.c
   src/${VR_BACKEND}/gfx.c
+  src/${VR_BACKEND}/audio.c
   src/${VR_BACKEND}/fs.c
   ${VR_INPUT_SOURCE}
 )
@@ -32,7 +34,7 @@ target_include_directories(vita_runtime PUBLIC include)
 if(VR_BACKEND STREQUAL "vita")
   target_link_libraries(vita_runtime PUBLIC
     SceLibKernel_stub SceIofilemgr_stub SceKernelThreadMgr_stub
-    SceCtrl_stub SceTouch_stub
+    SceCtrl_stub SceTouch_stub SceAudio_stub
     vitaGL vitashark SceShaccCgExt mathneon taihen_stub SceShaccCg_stub
     SceKernelDmacMgr_stub SceGxm_stub SceDisplay_stub SceAppMgr_stub
     SceCommonDialog_stub SceSysmodule_stub SceIme_stub)
@@ -47,6 +49,10 @@ if(VR_BUILD_SAMPLES)
 endif()
 if(UNIX AND NOT APPLE)
   target_link_libraries(vita_runtime PRIVATE m)
+endif()
+if(NOT VITA)
+  find_package(Threads REQUIRED)
+  target_link_libraries(vita_runtime PUBLIC Threads::Threads)
 endif()
 if(VR_BACKEND STREQUAL "host" AND VR_HOST_SDL2)
   target_link_libraries(vita_runtime PUBLIC SDL2::SDL2)
