@@ -61,6 +61,7 @@ static struct {
     GLuint        white;
     program_entry programs[MAX_PROGRAMS];
     int           program_count;
+    int           gl_initialized;
 } g;
 
 /* ---- Device -------------------------------------------------------------------- */
@@ -74,7 +75,9 @@ vr_result vr_gfx_init(const vr_gfx_desc *desc)
     /* The Vita display is fixed; other sizes are not supported. */
     if (desc && ((desc->width && desc->width != 960) || (desc->height && desc->height != 544)))
         return VR_ERR_UNSUPPORTED;
-    vglInit(0x800000);
+    if (!g.gl_initialized)
+        vglInit(0x800000);
+    g.gl_initialized = 1;
     g.width = 960;
     g.height = 544;
     g.vsync = desc ? desc->vsync : 0;
@@ -99,8 +102,10 @@ void vr_gfx_shutdown(void)
     for (i = 0; i < g.program_count; i++)
         glDeleteProgram(g.programs[i].program);
     glDeleteTextures(1, &g.white);
-    vglEnd();
+    /* vitaGL has no teardown call; the GPU context lives until exit, so a
+     * later vr_gfx_init must not initialize it again. */
     memset(&g, 0, sizeof(g));
+    g.gl_initialized = 1;
 }
 
 void vr_gfx_get_size(int *width, int *height)
@@ -262,8 +267,6 @@ vr_result vr_texture_create(const vr_texture_desc *desc, vr_texture **out)
     tex->format = desc->format;
     tex->levels = desc->levels ? desc->levels : max_levels;
     glGenTextures(1, &tex->id);
-    glBindTexture(GL_TEXTURE_2D, tex->id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, tex->levels - 1);
     *out = tex;
     return VR_OK;
 }
@@ -544,10 +547,19 @@ static GLenum gl_blend(vr_blend_factor f)
     static const GLenum map[] = {
         GL_ZERO, GL_ONE, GL_SRC_COLOR, GL_ONE_MINUS_SRC_COLOR, GL_SRC_ALPHA,
         GL_ONE_MINUS_SRC_ALPHA, GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_DST_COLOR,
-        GL_ONE_MINUS_DST_COLOR, GL_SRC_ALPHA_SATURATE, GL_CONSTANT_COLOR,
-        GL_ONE_MINUS_CONSTANT_COLOR
+        GL_ONE_MINUS_DST_COLOR, GL_SRC_ALPHA_SATURATE
     };
-    return (unsigned)f <= VR_BLEND_INV_CONSTANT ? map[f] : GL_ONE;
+    static int warned;
+
+    if (f == VR_BLEND_CONSTANT || f == VR_BLEND_INV_CONSTANT) {
+        /* vitaGL has no constant blend colour. */
+        if (!warned) {
+            vr_log(VR_LOG_WARN, "vr_gfx: constant blend factors are not supported on Vita");
+            warned = 1;
+        }
+        return f == VR_BLEND_CONSTANT ? GL_ONE : GL_ZERO;
+    }
+    return (unsigned)f <= VR_BLEND_SRC_ALPHA_SAT ? map[f] : GL_ONE;
 }
 
 static GLenum gl_blend_op(vr_blend_op op)
@@ -577,7 +589,10 @@ static void bind_stage(int unit, const vr_texture_stage *st)
         return;
     }
     glBindTexture(GL_TEXTURE_2D, st->texture->id);
-    if (st->mip_filter == VR_MIP_NONE)
+    /* GL needs a complete mip chain; without GL_TEXTURE_MAX_LEVEL a partial
+     * chain can only be sampled from level 0. */
+    if (st->mip_filter == VR_MIP_NONE ||
+        st->texture->levels < vr__mip_count(st->texture->width, st->texture->height))
         min = st->min_filter == VR_FILTER_LINEAR ? GL_LINEAR : GL_NEAREST;
     else if (st->mip_filter == VR_MIP_NEAREST)
         min = st->min_filter == VR_FILTER_LINEAR ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST;
@@ -596,8 +611,6 @@ static void apply_state(const vr_render_state *rs)
         glEnable(GL_BLEND);
         glBlendFunc(gl_blend(rs->blend_src), gl_blend(rs->blend_dst));
         glBlendEquation(gl_blend_op(rs->blend_op));
-        glBlendColor(rs->blend_constant[0], rs->blend_constant[1], rs->blend_constant[2],
-                     rs->blend_constant[3]);
     } else {
         glDisable(GL_BLEND);
     }
