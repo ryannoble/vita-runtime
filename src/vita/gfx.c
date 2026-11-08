@@ -50,7 +50,7 @@ typedef struct {
     shader_key key;
     GLuint     program;
     GLint      attr[A_COUNT];
-    GLint      u_m[4], u_vp, u_dr, u_bias, u_tfactor, u_fog, u_fog_color, u_aref, u_tex[2];
+    GLint      u_m[4], u_vp, u_dr, u_bias, u_off, u_scale, u_tfactor, u_fog, u_fog_color, u_aref, u_tex[2];
 } program_entry;
 
 static struct {
@@ -370,20 +370,23 @@ static void op_expr(char *src, int op, const char *dst, const char *x, const cha
 static const char *const vertex_src =
     "void main(float4 a_pos, float4 a_c0, float4 a_c1, float4 a_t0, float4 a_t1,\n"
     "  uniform float4 u_m0, uniform float4 u_m1, uniform float4 u_m2, uniform float4 u_m3,\n"
-    "  uniform float4 u_vp, uniform float2 u_dr, uniform float u_bias,\n"
+    "  uniform float4 u_vp, uniform float2 u_dr, uniform float u_bias, uniform float2 u_off,\n"
+    "  uniform float2 u_scale,\n"
     "  float4 out o_pos : POSITION, float4 out o_c0 : TEXCOORD0, float4 out o_c1 : TEXCOORD1,\n"
     "  float4 out o_t : TEXCOORD2, float out o_w : TEXCOORD3)\n"
     "{\n"
     "  float4 clip;\n"
     "#if PRETRANSFORMED\n"
     "  float w = 1.0 / a_pos.w;\n"
-    "  float2 ndc = float2((a_pos.x - u_vp.x) / u_vp.z * 2.0 - 1.0,\n"
-    "                      1.0 - (a_pos.y - u_vp.y) / u_vp.w * 2.0);\n"
+    "  float2 sp = a_pos.xy * u_scale + u_off;\n"
+    "  float2 ndc = float2((sp.x - u_vp.x) / u_vp.z * 2.0 - 1.0,\n"
+    "                      1.0 - (sp.y - u_vp.y) / u_vp.w * 2.0);\n"
     "  float z01 = (a_pos.z - u_dr.x) / u_dr.y;\n"
     "  clip = float4(ndc * w, z01 * w, w);\n"
     "#else\n"
     "  float4 p = float4(a_pos.xyz, 1.0);\n"
     "  clip = float4(dot(p, u_m0), dot(p, u_m1), dot(p, u_m2), dot(p, u_m3));\n"
+    "  clip.xy += float2(2.0 * u_off.x / u_vp.z, -2.0 * u_off.y / u_vp.w) * clip.w;\n"
     "#endif\n"
     "  clip.z += u_bias * clip.w;\n"
     "  o_pos = float4(clip.x, clip.y, 2.0 * clip.z - clip.w, clip.w);\n"
@@ -523,6 +526,8 @@ static program_entry *get_program(const shader_key *key)
     e->u_vp = glGetUniformLocation(e->program, "u_vp");
     e->u_dr = glGetUniformLocation(e->program, "u_dr");
     e->u_bias = glGetUniformLocation(e->program, "u_bias");
+    e->u_off = glGetUniformLocation(e->program, "u_off");
+    e->u_scale = glGetUniformLocation(e->program, "u_scale");
     e->u_tfactor = glGetUniformLocation(e->program, "u_tfactor");
     e->u_fog = glGetUniformLocation(e->program, "u_fog");
     e->u_fog_color = glGetUniformLocation(e->program, "u_fog_color");
@@ -751,6 +756,9 @@ vr_result vr_gfx_draw(const vr_draw_desc *d)
     glUniform2f(p->u_dr, g.vp_min_z,
                 g.vp_max_z != g.vp_min_z ? g.vp_max_z - g.vp_min_z : 1.0f);
     glUniform1f(p->u_bias, rs->depth_bias);
+    glUniform2f(p->u_off, d->screen_offset[0], d->screen_offset[1]);
+    glUniform2f(p->u_scale, d->screen_scale[0] != 0.0f ? d->screen_scale[0] : 1.0f,
+                d->screen_scale[1] != 0.0f ? d->screen_scale[1] : 1.0f);
     glUniform4fv(p->u_tfactor, 1, rs->texture_factor);
     glUniform2f(p->u_fog, rs->fog_start, rs->fog_end);
     glUniform4fv(p->u_fog_color, 1, rs->fog_color);

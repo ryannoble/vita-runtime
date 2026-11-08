@@ -740,13 +740,15 @@ static void raster_line(const vr_render_state *rs, const scr_vtx *a, const scr_v
 
 /* ---- Vertex processing ------------------------------------------------------------ */
 
+static float g_offset[2], g_scale[2]; /* screen_offset/scale of the current draw */
+
 static void to_screen(const clip_vtx *c, int pretransformed, scr_vtx *s)
 {
     int i;
 
     if (pretransformed) {
-        s->sx = c->x;
-        s->sy = c->y;
+        s->sx = c->x * g_scale[0];
+        s->sy = c->y * g_scale[1];
         s->sz = c->z;
         s->inv_w = c->w != 0.0f ? 1.0f / c->w : 1.0f;
     } else {
@@ -756,6 +758,8 @@ static void to_screen(const clip_vtx *c, int pretransformed, scr_vtx *s)
         s->sz = g.vp_min_z + c->z * iw * (g.vp_max_z - g.vp_min_z);
         s->inv_w = iw;
     }
+    s->sx += g_offset[0];
+    s->sy += g_offset[1];
     for (i = 0; i < NVAR; i++)
         s->var[i] = c->var[i] * s->inv_w;
 }
@@ -876,6 +880,10 @@ vr_result vr_gfx_draw(const vr_draw_desc *d)
         indices = d->index_buffer ? d->index_buffer->data + d->index_offset : d->index_data;
     count = d->index_count ? d->index_count : d->vertex_count;
     prims = vr__prim_count(d->primitive, count);
+    g_offset[0] = d->screen_offset[0];
+    g_offset[1] = d->screen_offset[1];
+    g_scale[0] = d->screen_scale[0] != 0.0f ? d->screen_scale[0] : 1.0f;
+    g_scale[1] = d->screen_scale[1] != 0.0f ? d->screen_scale[1] : 1.0f;
 
     for (p = 0; p < prims; p++) {
         uint32_t slot[3];

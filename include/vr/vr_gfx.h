@@ -20,8 +20,10 @@ extern "C" {
  *   plane; fragments outside 0..1 depth are discarded.
  * - Screen space has y pointing down. Winding is judged in screen space.
  * - Fragments are sampled at pixel centres (x + 0.5, y + 0.5) with a
- *   top-left fill rule. Direct3D 8/9 pre-transformed vertices need a -0.5
- *   offset to match (the D3D shim does this).
+ *   top-left fill rule. Direct3D 8/9 put pixel centres at integers; pass
+ *   screen_offset = { 0.5, 0.5 } (times any screen_scale) to reproduce that,
+ *   so a D3D coordinate of 0 lands on the centre of pixel 0 (the D3D shim
+ *   does this).
  * - Colours are 0..1 floats in the API (RGBA order). */
 
 typedef struct vr_buffer  vr_buffer;
@@ -281,6 +283,10 @@ typedef struct {
 
     const float           *transform; /* world*view*proj; NULL = identity */
     const vr_render_state *state;     /* NULL = defaults */
+    /* POSITION_T x/y are multiplied by screen_scale (0 means 1), then
+     * screen_offset (pixels) is added to every projected vertex. */
+    float screen_scale[2];
+    float screen_offset[2];
 } vr_draw_desc;
 
 vr_result vr_gfx_draw(const vr_draw_desc *desc);

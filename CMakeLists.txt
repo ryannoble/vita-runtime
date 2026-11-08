@@ -62,7 +62,12 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vita_runtime PRIVATE -Wall -Wextra -Werror)
 endif()
 
+option(VR_BUILD_D3D8 "Build the Direct3D 8 shim (C++)" ON)
+
 if(PROJECT_IS_TOP_LEVEL AND NOT VITA)
   enable_testing()
   add_subdirectory(tests)
+endif()
+if(VR_BUILD_D3D8)
+  add_subdirectory(d3dshim)
 endif()
