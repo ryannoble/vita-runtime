@@ -31,3 +31,16 @@ jobs:
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+  vita:
+    runs-on: ubuntu-latest
+    container: vitasdk/vitasdk:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: apk add --no-cache cmake make
+      - name: Configure
+        run: cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DVR_BUILD_SAMPLES=ON
+      - name: Build
+        run: cmake --build build-vita
+      - name: Check library
+        run: test -f build-vita/libvita_runtime.a
