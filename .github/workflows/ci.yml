@@ -37,7 +37,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
-        run: apk add --no-cache cmake make
+        run: |
+          if ! command -v cmake >/dev/null || ! command -v make >/dev/null; then
+            if command -v apt-get >/dev/null; then
+              apt-get update && apt-get install -y cmake make
+            else
+              apk add --no-cache cmake make
+            fi
+          fi
+          cmake --version
+      - name: List SDK libraries
+        run: ls "$VITASDK/arm-vita-eabi/lib" | sort | tr '\n' ' '
       - name: Configure
         run: cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DVR_BUILD_SAMPLES=ON
       - name: Build
