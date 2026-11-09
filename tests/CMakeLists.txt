@@ -19,3 +19,8 @@ add_executable(vr_audio_tests test_audio.c)
 target_link_libraries(vr_audio_tests PRIVATE vita_runtime)
 add_test(NAME vr_audio_tests COMMAND vr_audio_tests)
 set_tests_properties(vr_audio_tests PROPERTIES ENVIRONMENT VR_HEADLESS=1)
+
+add_executable(vr_shader_cache_tests test_shader_cache.c)
+target_link_libraries(vr_shader_cache_tests PRIVATE vita_runtime)
+target_include_directories(vr_shader_cache_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME vr_shader_cache_tests COMMAND vr_shader_cache_tests)

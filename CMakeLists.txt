@@ -23,6 +23,7 @@ add_library(vita_runtime
   src/path.c
   src/input_common.c
   src/gfx_common.c
+  src/shader_cache.c
   src/audio_common.c
   src/${VR_BACKEND}/platform.c
   src/${VR_BACKEND}/gfx.c

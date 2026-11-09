@@ -37,6 +37,17 @@ pair that is generated, compiled at runtime and cached. vitaGL's runtime
 compiler needs `libshacccg.suprx` extracted to `ur0:data/` on the device, as for
 any vitaGL application.
 
+Compiled programs are cached in `<data root>/shader_cache/` (for example
+`ux0:data/<app>/shader_cache/`), so only the first launch pays for runtime
+compilation (about 2.4 s for the first frame of a small scene). Each file has
+a checked header: a format version, a key covering the exact shader sources
+and the vitaGL version, a length and a checksum. vitaGL itself does not
+validate program binaries, so files that do not match exactly are deleted and
+recompiled instead of being loaded. Files are written under a temporary name
+and renamed, so an interrupted write never leaves a partial file. Delete the
+folder to clear the cache. `log.txt` records each program as "compiled" or
+"loaded from cache" with its time.
+
 The display size is fixed at 960x544. `vr_gfx_init` returns
 `VR_ERR_UNSUPPORTED` for any other size; 0 selects the default.
 
@@ -86,5 +97,5 @@ It needs `libshacccg.suprx` on the device.
 The samples themselves have not been packaged and run, but every Vita backend
 (platform, files, input including both touch panels, graphics through the
 Direct3D 8 shim, and audio) has been verified on a PS Vita by an application
-that uses the same code paths, at a locked 60 fps. The first frame takes about
-2.4 s while vitaGL compiles the shaders at runtime.
+that uses the same code paths, at a locked 60 fps. Before the shader cache,
+the first frame took about 2.4 s while vitaGL compiled the shaders.
