@@ -12,12 +12,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <vitaGL.h>
 
 #include "vr/vr_gfx.h"
 #include "vr/vr_platform.h"
 #include "../gfx_internal.h"
+#include "../internal.h"
+#include "../shader_cache.h"
+
+/* Compiled programs are cached in <data root>/shader_cache/ so that only the
+ * first launch pays for runtime shader compilation. Delete the folder to
+ * clear it; stale or damaged files are detected and replaced. */
+#define CACHE_DIR      "shader_cache"
+#define CACHE_MAX_SIZE (1024 * 1024)
 
 #define MAX_PROGRAMS 128
 #define SRC_SIZE     4096
@@ -63,6 +72,8 @@ static struct {
     program_entry programs[MAX_PROGRAMS];
     int           program_count;
     int           gl_initialized;
+    uint64_t      compiler_id; /* hash of the GL version/renderer strings */
+    int           cache_dir_ready, cache_write_warned;
 } g;
 
 /* ---- Device -------------------------------------------------------------------- */
@@ -88,6 +99,12 @@ vr_result vr_gfx_init(const vr_gfx_desc *desc)
         vglInit(0x800000);
     }
     g.gl_initialized = 1;
+    {
+        const char *ver = (const char *)glGetString(GL_VERSION);
+        const char *ren = (const char *)glGetString(GL_RENDERER);
+        g.compiler_id = vr__fnv1a64(ver ? ver : "", ver ? strlen(ver) : 0, VR__FNV_SEED);
+        g.compiler_id = vr__fnv1a64(ren ? ren : "", ren ? strlen(ren) : 0, g.compiler_id);
+    }
     g.width = 960;
     g.height = 544;
     g.vsync = desc ? desc->vsync : 0;
@@ -495,12 +512,124 @@ static GLuint compile(int vertex, const char *defines, const char *body)
     return sh;
 }
 
+/* ---- Shader cache ------------------------------------------------------------ */
+
+static void cache_path(uint64_t key, const char *suffix, char *out, size_t size)
+{
+    snprintf(out, size, "%s/" CACHE_DIR "/%016llx%s", vr__data_root(), (unsigned long long)key,
+             suffix);
+}
+
+/* Returns a linked program built from the cache file for key, or 0. */
+static GLuint cache_load(uint64_t key)
+{
+    char path[VR_MAX_PATH];
+    uint8_t *buf = NULL;
+    const void *payload;
+    size_t payload_size = 0, done = 0;
+    SceOff size;
+    SceUID fd;
+    GLuint prog = 0;
+    GLint linked = 0;
+
+    cache_path(key, ".bin", path, sizeof(path));
+    fd = sceIoOpen(path, SCE_O_RDONLY, 0);
+    if (fd < 0)
+        return 0;
+    size = sceIoLseek(fd, 0, SCE_SEEK_END);
+    sceIoLseek(fd, 0, SCE_SEEK_SET);
+    if (size > VR__CACHE_HEADER_SIZE && size <= CACHE_MAX_SIZE)
+        buf = malloc((size_t)size);
+    while (buf && done < (size_t)size) {
+        int got = sceIoRead(fd, buf + done, (SceSize)((size_t)size - done));
+        if (got <= 0)
+            break;
+        done += (size_t)got;
+    }
+    sceIoClose(fd);
+    payload = buf && done == (size_t)size ? vr__cache_unpack(key, buf, done, &payload_size) : NULL;
+    if (payload) {
+        /* vitaGL does not validate program binaries, hence the checked header. */
+        prog = glCreateProgram();
+        glProgramBinary(prog, 0, payload, (GLsizei)payload_size);
+        glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+        if (!linked) {
+            glDeleteProgram(prog);
+            prog = 0;
+        }
+    }
+    free(buf);
+    if (!prog) {
+        vr_log(VR_LOG_WARN, "vr_gfx: discarding unusable shader cache file %s", path);
+        sceIoRemove(path);
+    }
+    return prog;
+}
+
+static void cache_store(GLuint prog, uint64_t key)
+{
+    char path[VR_MAX_PATH], tmp[VR_MAX_PATH];
+    GLint len = 0;
+    GLsizei got = 0;
+    GLenum format = 0;
+    uint8_t *bin, *file;
+    size_t n, done = 0;
+    SceUID fd;
+
+    glGetProgramiv(prog, GL_PROGRAM_BINARY_LENGTH, &len);
+    if (len <= 0 || len > CACHE_MAX_SIZE)
+        return;
+    bin = malloc((size_t)len);
+    file = malloc((size_t)len + VR__CACHE_HEADER_SIZE);
+    if (bin && file) {
+        glGetProgramBinary(prog, len, &got, &format, bin);
+    }
+    n = got > 0 && got <= len ? vr__cache_pack(key, bin, (size_t)got, file, (size_t)len + VR__CACHE_HEADER_SIZE) : 0;
+    free(bin);
+    if (!n) {
+        free(file);
+        return;
+    }
+    if (!g.cache_dir_ready) {
+        snprintf(path, sizeof(path), "%s/" CACHE_DIR, vr__data_root());
+        sceIoMkdir(path, 0777); /* fails harmlessly if it exists */
+        g.cache_dir_ready = 1;
+    }
+    /* Write to a temporary name and rename, so an interrupted write never
+     * leaves a partial file under the real name. */
+    cache_path(key, ".bin", path, sizeof(path));
+    cache_path(key, ".tmp", tmp, sizeof(tmp));
+    fd = sceIoOpen(tmp, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+    while (fd >= 0 && done < n) {
+        int w = sceIoWrite(fd, file + done, (SceSize)(n - done));
+        if (w <= 0)
+            break;
+        done += (size_t)w;
+    }
+    if (fd >= 0)
+        sceIoClose(fd);
+    free(file);
+    if (fd >= 0 && done == n) {
+        sceIoRemove(path); /* rename does not replace an existing file */
+        if (sceIoRename(tmp, path) >= 0)
+            return;
+    }
+    if (fd >= 0)
+        sceIoRemove(tmp);
+    if (!g.cache_write_warned) {
+        vr_log(VR_LOG_WARN, "vr_gfx: could not write the shader cache in %s/" CACHE_DIR,
+               vr__data_root());
+        g.cache_write_warned = 1;
+    }
+}
+
 static program_entry *get_program(const shader_key *key)
 {
     static const char *const attr_names[A_COUNT] = { "a_pos", "a_c0", "a_c1", "a_t0", "a_t1" };
     char defines[160], *frag;
     program_entry *e;
     GLuint vs, fs;
+    uint64_t ckey, t0;
     int i;
 
     for (i = 0; i < g.program_count; i++)
@@ -528,6 +657,20 @@ static program_entry *get_program(const shader_key *key)
     snprintf(defines, sizeof(defines),
              "#define PRETRANSFORMED %d\n#define POS_W1 %d\n#define C0_BGRA %d\n#define C1_BGRA %d\n",
              key->pretransformed, key->pos_w1, key->c0_bgra, key->c1_bgra);
+
+    /* The cache key covers the exact sources and the compiler build. */
+    ckey = vr__fnv1a64(defines, strlen(defines), g.compiler_id);
+    ckey = vr__fnv1a64(vertex_src, strlen(vertex_src), ckey);
+    ckey = vr__fnv1a64(frag, strlen(frag), ckey);
+    t0 = vr_time_us();
+    e->program = cache_load(ckey);
+    if (e->program) {
+        free(frag);
+        vr_log(VR_LOG_INFO, "vr_gfx: shader %016llx loaded from cache in %.1f ms",
+               (unsigned long long)ckey, (double)(vr_time_us() - t0) / 1000.0);
+        goto locations;
+    }
+
     vs = compile(1, defines, vertex_src);
     fs = compile(0, "", frag);
     free(frag);
@@ -564,6 +707,11 @@ static program_entry *get_program(const shader_key *key)
             return NULL;
         }
     }
+    vr_log(VR_LOG_INFO, "vr_gfx: shader %016llx compiled in %.1f ms", (unsigned long long)ckey,
+           (double)(vr_time_us() - t0) / 1000.0);
+    cache_store(e->program, ckey);
+
+locations:
     for (i = 0; i < A_COUNT; i++)
         e->attr[i] = glGetAttribLocation(e->program, attr_names[i]);
     e->u_m[0] = glGetUniformLocation(e->program, "u_m0");
