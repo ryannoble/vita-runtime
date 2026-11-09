@@ -41,12 +41,27 @@ Compiled programs are cached in `<data root>/shader_cache/` (for example
 `ux0:data/<app>/shader_cache/`), so only the first launch pays for runtime
 compilation (about 2.4 s for the first frame of a small scene). Each file has
 a checked header: a format version, a key covering the exact shader sources
-and the vitaGL version, a length and a checksum. vitaGL itself does not
-validate program binaries, so files that do not match exactly are deleted and
-recompiled instead of being loaded. Files are written under a temporary name
-and renamed, so an interrupted write never leaves a partial file. Delete the
-folder to clear the cache. `log.txt` records each program as "compiled" or
-"loaded from cache" with its time.
+and defines, a build identity for the runtime shader/cache code, a SHA-256
+identity for the linked `libvitaGL.a`, the GL version/renderer strings, a
+length, and a checksum. VitaGL's GL version and renderer strings are fixed, so
+the linked archive identity is included separately to invalidate binaries
+after a vitaGL update. Compile and link status are checked explicitly; failed
+programs are logged with their shader key and are never written to disk. This
+is important because `glGetProgramInfoLog` may not provide diagnostics in
+vitaGL. vitaGL itself does not validate program binaries, so files that do not
+match exactly or fail to link are deleted and recompiled instead of being
+used. Files are written under a temporary name and renamed, so an interrupted
+write never leaves a partial file. Delete the folder to clear the cache.
+`log.txt` records each program as "compiled" or "loaded from cache" with its
+time.
+
+The Vita backend holds at most 128 shader configurations in memory and clears
+that table when full. Successfully cached programs can be loaded from disk
+after a clear. Failed configurations are only negative-cached in memory; if a
+scene cycles through more than 128 distinct configurations and revisits a
+failed one after a clear, that shader will be compiled again. The cap prevents
+unbounded memory growth, not repeated cumulative work across an unbounded
+sequence of scene changes.
 
 The display size is fixed at 960x544. `vr_gfx_init` returns
 `VR_ERR_UNSUPPORTED` for any other size; 0 selects the default.

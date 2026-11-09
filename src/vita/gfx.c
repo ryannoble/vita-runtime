@@ -72,7 +72,7 @@ static struct {
     program_entry programs[MAX_PROGRAMS];
     int           program_count;
     int           gl_initialized;
-    uint64_t      compiler_id; /* hash of the GL version/renderer strings */
+    uint64_t      compiler_id; /* runtime, vitaGL, GL version and renderer identity */
     int           cache_dir_ready, cache_write_warned;
 } g;
 
@@ -102,8 +102,8 @@ vr_result vr_gfx_init(const vr_gfx_desc *desc)
     {
         const char *ver = (const char *)glGetString(GL_VERSION);
         const char *ren = (const char *)glGetString(GL_RENDERER);
-        g.compiler_id = vr__fnv1a64(ver ? ver : "", ver ? strlen(ver) : 0, VR__FNV_SEED);
-        g.compiler_id = vr__fnv1a64(ren ? ren : "", ren ? strlen(ren) : 0, g.compiler_id);
+        g.compiler_id = vr__shader_cache_environment_id(
+            VR_RUNTIME_SHADER_BUILD_ID, VR_VITAGL_BUILD_ID, (const char *)ver, (const char *)ren);
     }
     g.width = 960;
     g.height = 544;
@@ -489,7 +489,7 @@ static void build_fragment(const shader_key *k, char *src)
 /* Shaders are Cg. vitaGL treats GL_VERTEX_SHADER/GL_FRAGMENT_SHADER sources
  * as GLSL (and defers their compile to link time), so the Cg-specific types
  * are required. */
-static GLuint compile(int vertex, const char *defines, const char *body)
+static GLuint compile(uint64_t cache_key, int vertex, const char *defines, const char *body)
 {
     const char *parts[2] = { defines, body };
     GLuint sh = glCreateShader(vertex ? GL_CG_VERTEX_SHADER_EXT : GL_CG_FRAGMENT_SHADER_EXT);
@@ -504,8 +504,9 @@ static GLuint compile(int vertex, const char *defines, const char *body)
         info[0] = '\0';
         glGetShaderInfoLog(sh, (GLsizei)sizeof(info) - 1, &len, info);
         info[len > 0 && len < (GLsizei)sizeof(info) ? len : 0] = '\0';
-        vr_log(VR_LOG_ERROR, "vr_gfx: %s shader compile failed: %s",
-               vertex ? "vertex" : "fragment", info[0] ? info : "(no compiler log)");
+        vr_log(VR_LOG_ERROR, "vr_gfx: shader %016llx %s compile failed: %s",
+               (unsigned long long)cache_key, vertex ? "vertex" : "fragment",
+               info[0] ? info : "(no compiler log)");
         glDeleteShader(sh);
         return 0;
     }
@@ -630,6 +631,7 @@ static program_entry *get_program(const shader_key *key)
     program_entry *e;
     GLuint vs, fs;
     uint64_t ckey, t0;
+    GLint linked = 0;
     int i;
 
     for (i = 0; i < g.program_count; i++)
@@ -659,9 +661,7 @@ static program_entry *get_program(const shader_key *key)
              key->pretransformed, key->pos_w1, key->c0_bgra, key->c1_bgra);
 
     /* The cache key covers the exact sources and the compiler build. */
-    ckey = vr__fnv1a64(defines, strlen(defines), g.compiler_id);
-    ckey = vr__fnv1a64(vertex_src, strlen(vertex_src), ckey);
-    ckey = vr__fnv1a64(frag, strlen(frag), ckey);
+    ckey = vr__shader_cache_key(g.compiler_id, defines, vertex_src, frag);
     t0 = vr_time_us();
     e->program = cache_load(ckey);
     if (e->program) {
@@ -671,8 +671,8 @@ static program_entry *get_program(const shader_key *key)
         goto locations;
     }
 
-    vs = compile(1, defines, vertex_src);
-    fs = compile(0, "", frag);
+    vs = compile(ckey, 1, defines, vertex_src);
+    fs = compile(ckey, 0, "", frag);
     free(frag);
     if (!vs || !fs) {
         if (vs)
@@ -690,23 +690,23 @@ static program_entry *get_program(const shader_key *key)
     glLinkProgram(e->program);
     glDeleteShader(vs);
     glDeleteShader(fs);
-    {
-        GLint linked = 0;
-        glGetProgramiv(e->program, GL_LINK_STATUS, &linked);
-        if (!linked) {
-            /* A failed program must not be queried: vitaGL dereferences its
-             * shaders in glGetAttribLocation. */
-            char info[512];
-            GLsizei len = 0;
-            info[0] = '\0';
-            glGetProgramInfoLog(e->program, (GLsizei)sizeof(info) - 1, &len, info);
-            info[len > 0 && len < (GLsizei)sizeof(info) ? len : 0] = '\0';
-            vr_log(VR_LOG_ERROR, "vr_gfx: shader link failed: %s", info[0] ? info : "(no linker log)");
-            glDeleteProgram(e->program);
-            e->program = 0;
-            return NULL;
-        }
+    glGetProgramiv(e->program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        /* A failed program must not be queried: vitaGL dereferences its
+         * shaders in glGetAttribLocation. */
+        char info[512];
+        GLsizei len = 0;
+        info[0] = '\0';
+        glGetProgramInfoLog(e->program, (GLsizei)sizeof(info) - 1, &len, info);
+        info[len > 0 && len < (GLsizei)sizeof(info) ? len : 0] = '\0';
+        vr_log(VR_LOG_ERROR, "vr_gfx: shader %016llx link failed: %s",
+               (unsigned long long)ckey, info[0] ? info : "(no linker log)");
+        glDeleteProgram(e->program);
+        e->program = 0;
+        return NULL;
     }
+    if (!vr__shader_cache_store_allowed(vs != 0, fs != 0, linked))
+        return NULL;
     vr_log(VR_LOG_INFO, "vr_gfx: shader %016llx compiled in %.1f ms", (unsigned long long)ckey,
            (double)(vr_time_us() - t0) / 1000.0);
     cache_store(e->program, ckey);

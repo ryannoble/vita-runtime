@@ -26,6 +26,17 @@
 #define VR__FNV_SEED 0xcbf29ce484222325ull
 uint64_t vr__fnv1a64(const void *data, size_t size, uint64_t seed);
 
+/* Builds stable identities from null-terminated version/source strings.
+ * Fields are length-prefixed before hashing so concatenation boundaries are
+ * unambiguous. */
+uint64_t vr__shader_cache_environment_id(const char *runtime_build_id,
+                                         const char *vitagl_build_id,
+                                         const char *gl_version,
+                                         const char *renderer);
+uint64_t vr__shader_cache_key(uint64_t environment_id, const char *defines,
+                              const char *vertex_source, const char *fragment_source);
+int vr__shader_cache_store_allowed(int vertex_compiled, int fragment_compiled, int linked);
+
 /* Writes header + payload to out. Returns the bytes written, or 0 if cap is
  * too small. */
 size_t vr__cache_pack(uint64_t key, const void *payload, size_t size, void *out, size_t cap);
