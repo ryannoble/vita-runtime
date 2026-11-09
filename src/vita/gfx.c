@@ -58,7 +58,9 @@ typedef struct {
 
 typedef struct {
     shader_key key;
+    uint64_t   cache_key;
     GLuint     program;
+    int        compile_failed;
     GLint      attr[A_COUNT];
     GLint      u_m[4], u_vp, u_dr, u_bias, u_off, u_scale, u_tfactor, u_fog, u_fog_color, u_aref, u_tex[2];
 } program_entry;
@@ -75,6 +77,41 @@ static struct {
     uint64_t      compiler_id; /* runtime, vitaGL, GL version and renderer identity */
     int           cache_dir_ready, cache_write_warned;
 } g;
+
+/* Retain bounded evidence of evicted negative entries so a later retry can
+ * be distinguished from a shader's first compile. */
+static uint64_t evicted_negative_keys[MAX_PROGRAMS];
+static int evicted_negative_key_count;
+static uint64_t negative_cache_evictions;
+static uint64_t negative_cache_recompiles;
+
+static void remember_evicted_negative_key(uint64_t cache_key)
+{
+    int i;
+    for (i = 0; i < evicted_negative_key_count; i++)
+        if (evicted_negative_keys[i] == cache_key)
+            return;
+    if (evicted_negative_key_count == MAX_PROGRAMS) {
+        memmove(evicted_negative_keys, evicted_negative_keys + 1,
+                (MAX_PROGRAMS - 1) * sizeof(evicted_negative_keys[0]));
+        evicted_negative_key_count--;
+    }
+    evicted_negative_keys[evicted_negative_key_count++] = cache_key;
+}
+
+static int consume_evicted_negative_key(uint64_t cache_key)
+{
+    int i;
+    for (i = 0; i < evicted_negative_key_count; i++) {
+        if (evicted_negative_keys[i] == cache_key) {
+            memmove(&evicted_negative_keys[i], &evicted_negative_keys[i + 1],
+                    (evicted_negative_key_count - i - 1) * sizeof(evicted_negative_keys[0]));
+            evicted_negative_key_count--;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* ---- Device -------------------------------------------------------------------- */
 
@@ -639,9 +676,21 @@ static program_entry *get_program(const shader_key *key)
             return g.programs[i].program ? &g.programs[i] : NULL; /* 0 = failed before */
     if (g.program_count == MAX_PROGRAMS) {
         /* Simple policy: drop the whole cache when full. */
-        for (i = 0; i < g.program_count; i++)
+        int evicted_failures = 0;
+        for (i = 0; i < g.program_count; i++) {
+            if (g.programs[i].compile_failed) {
+                remember_evicted_negative_key(g.programs[i].cache_key);
+                evicted_failures++;
+            }
             if (g.programs[i].program)
                 glDeleteProgram(g.programs[i].program);
+        }
+        if (evicted_failures) {
+            negative_cache_evictions += (uint64_t)evicted_failures;
+            vr_log(VR_LOG_WARN,
+                   "vr_gfx: evicted %d negative shader cache entries at capacity (total=%llu)",
+                   evicted_failures, (unsigned long long)negative_cache_evictions);
+        }
         g.program_count = 0;
     }
 
@@ -662,6 +711,7 @@ static program_entry *get_program(const shader_key *key)
 
     /* The cache key covers the exact sources and the compiler build. */
     ckey = vr__shader_cache_key(g.compiler_id, defines, vertex_src, frag);
+    e->cache_key = ckey;
     t0 = vr_time_us();
     e->program = cache_load(ckey);
     if (e->program) {
@@ -669,6 +719,15 @@ static program_entry *get_program(const shader_key *key)
         vr_log(VR_LOG_INFO, "vr_gfx: shader %016llx loaded from cache in %.1f ms",
                (unsigned long long)ckey, (double)(vr_time_us() - t0) / 1000.0);
         goto locations;
+    }
+
+    if (consume_evicted_negative_key(ckey)) {
+        negative_cache_recompiles++;
+        vr_log(VR_LOG_WARN,
+               "vr_gfx: shader %016llx recompiling after negative-cache eviction "
+               "(evictions=%llu recompiles=%llu)",
+               (unsigned long long)ckey, (unsigned long long)negative_cache_evictions,
+               (unsigned long long)negative_cache_recompiles);
     }
 
     vs = compile(ckey, 1, defines, vertex_src);
@@ -679,6 +738,7 @@ static program_entry *get_program(const shader_key *key)
             glDeleteShader(vs);
         if (fs)
             glDeleteShader(fs);
+        e->compile_failed = 1;
         return NULL;
     }
 
@@ -703,6 +763,7 @@ static program_entry *get_program(const shader_key *key)
                (unsigned long long)ckey, info[0] ? info : "(no linker log)");
         glDeleteProgram(e->program);
         e->program = 0;
+        e->compile_failed = 1;
         return NULL;
     }
     if (!vr__shader_cache_store_allowed(vs != 0, fs != 0, linked))
