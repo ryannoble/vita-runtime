@@ -434,7 +434,7 @@ static void build_fragment(const shader_key *k, char *src)
            "  float4 cur = v_c0;\n"
            "  float4 a1, a2, next;\n");
     for (s = 0; s < k->stages; s++) {
-        char x[48], y[48];
+        char x[64], y[64]; /* arg_expr writes at most 8 + 47 bytes */
 
         append(src, "  float4 tex%d = tex2D(u_tex%d, %s);\n", s, s, k->texcoord[s] ? "v_t.zw" : "v_t.xy");
         append(src, "  next = cur;\n");
