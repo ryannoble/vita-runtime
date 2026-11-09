@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <psp2/io/stat.h>
 #include <vitaGL.h>
 
 #include "vr/vr_gfx.h"
@@ -75,8 +76,17 @@ vr_result vr_gfx_init(const vr_gfx_desc *desc)
     /* The Vita display is fixed; other sizes are not supported. */
     if (desc && ((desc->width && desc->width != 960) || (desc->height && desc->height != 544)))
         return VR_ERR_UNSUPPORTED;
-    if (!g.gl_initialized)
+    if (!g.gl_initialized) {
+        /* vitaGL compiles shaders with SceShaccCg; it looks in these two places. */
+        SceIoStat st;
+        if (sceIoGetstat("ur0:data/libshacccg.suprx", &st) < 0 &&
+            sceIoGetstat("ur0:data/external/libshacccg.suprx", &st) < 0) {
+            vr_log(VR_LOG_ERROR, "vr_gfx: ur0:data/libshacccg.suprx is missing; extract it "
+                   "with ShaRKF00D (needed to compile shaders)");
+            return VR_ERR_UNSUPPORTED;
+        }
         vglInit(0x800000);
+    }
     g.gl_initialized = 1;
     g.width = 960;
     g.height = 544;
@@ -100,7 +110,8 @@ void vr_gfx_shutdown(void)
     if (!g.ready)
         return;
     for (i = 0; i < g.program_count; i++)
-        glDeleteProgram(g.programs[i].program);
+        if (g.programs[i].program)
+            glDeleteProgram(g.programs[i].program);
     glDeleteTextures(1, &g.white);
     /* vitaGL has no teardown call; the GPU context lives until exit, so a
      * later vr_gfx_init must not initialize it again. */
@@ -458,17 +469,26 @@ static void build_fragment(const shader_key *k, char *src)
     append(src, "  return cur;\n}\n");
 }
 
-static GLuint compile(GLenum type, const char *defines, const char *body)
+/* Shaders are Cg. vitaGL treats GL_VERTEX_SHADER/GL_FRAGMENT_SHADER sources
+ * as GLSL (and defers their compile to link time), so the Cg-specific types
+ * are required. */
+static GLuint compile(int vertex, const char *defines, const char *body)
 {
     const char *parts[2] = { defines, body };
-    GLuint sh = glCreateShader(type);
+    GLuint sh = glCreateShader(vertex ? GL_CG_VERTEX_SHADER_EXT : GL_CG_FRAGMENT_SHADER_EXT);
     GLint ok = 0;
 
     glShaderSource(sh, 2, parts, NULL);
     glCompileShader(sh);
     glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
     if (!ok) {
-        vr_log(VR_LOG_ERROR, "vr_gfx: shader compile failed");
+        char info[512];
+        GLsizei len = 0;
+        info[0] = '\0';
+        glGetShaderInfoLog(sh, (GLsizei)sizeof(info) - 1, &len, info);
+        info[len > 0 && len < (GLsizei)sizeof(info) ? len : 0] = '\0';
+        vr_log(VR_LOG_ERROR, "vr_gfx: %s shader compile failed: %s",
+               vertex ? "vertex" : "fragment", info[0] ? info : "(no compiler log)");
         glDeleteShader(sh);
         return 0;
     }
@@ -485,13 +505,21 @@ static program_entry *get_program(const shader_key *key)
 
     for (i = 0; i < g.program_count; i++)
         if (!memcmp(&g.programs[i].key, key, sizeof(*key)))
-            return &g.programs[i];
+            return g.programs[i].program ? &g.programs[i] : NULL; /* 0 = failed before */
     if (g.program_count == MAX_PROGRAMS) {
         /* Simple policy: drop the whole cache when full. */
         for (i = 0; i < g.program_count; i++)
-            glDeleteProgram(g.programs[i].program);
+            if (g.programs[i].program)
+                glDeleteProgram(g.programs[i].program);
         g.program_count = 0;
     }
+
+    /* Reserve the cache slot first so a failure is remembered (program 0)
+     * instead of being recompiled and logged on every draw. */
+    e = &g.programs[g.program_count];
+    memset(e, 0, sizeof(*e));
+    e->key = *key;
+    g.program_count++;
 
     frag = malloc(SRC_SIZE);
     if (!frag)
@@ -500,8 +528,8 @@ static program_entry *get_program(const shader_key *key)
     snprintf(defines, sizeof(defines),
              "#define PRETRANSFORMED %d\n#define POS_W1 %d\n#define C0_BGRA %d\n#define C1_BGRA %d\n",
              key->pretransformed, key->pos_w1, key->c0_bgra, key->c1_bgra);
-    vs = compile(GL_VERTEX_SHADER, defines, vertex_src);
-    fs = compile(GL_FRAGMENT_SHADER, "", frag);
+    vs = compile(1, defines, vertex_src);
+    fs = compile(0, "", frag);
     free(frag);
     if (!vs || !fs) {
         if (vs)
@@ -511,9 +539,6 @@ static program_entry *get_program(const shader_key *key)
         return NULL;
     }
 
-    e = &g.programs[g.program_count];
-    memset(e, 0, sizeof(*e));
-    e->key = *key;
     e->program = glCreateProgram();
     glAttachShader(e->program, vs);
     glAttachShader(e->program, fs);
@@ -522,6 +547,23 @@ static program_entry *get_program(const shader_key *key)
     glLinkProgram(e->program);
     glDeleteShader(vs);
     glDeleteShader(fs);
+    {
+        GLint linked = 0;
+        glGetProgramiv(e->program, GL_LINK_STATUS, &linked);
+        if (!linked) {
+            /* A failed program must not be queried: vitaGL dereferences its
+             * shaders in glGetAttribLocation. */
+            char info[512];
+            GLsizei len = 0;
+            info[0] = '\0';
+            glGetProgramInfoLog(e->program, (GLsizei)sizeof(info) - 1, &len, info);
+            info[len > 0 && len < (GLsizei)sizeof(info) ? len : 0] = '\0';
+            vr_log(VR_LOG_ERROR, "vr_gfx: shader link failed: %s", info[0] ? info : "(no linker log)");
+            glDeleteProgram(e->program);
+            e->program = 0;
+            return NULL;
+        }
+    }
     for (i = 0; i < A_COUNT; i++)
         e->attr[i] = glGetAttribLocation(e->program, attr_names[i]);
     e->u_m[0] = glGetUniformLocation(e->program, "u_m0");
@@ -539,7 +581,6 @@ static program_entry *get_program(const shader_key *key)
     e->u_aref = glGetUniformLocation(e->program, "u_aref");
     e->u_tex[0] = glGetUniformLocation(e->program, "u_tex0");
     e->u_tex[1] = glGetUniformLocation(e->program, "u_tex1");
-    g.program_count++;
     return e;
 }
 
