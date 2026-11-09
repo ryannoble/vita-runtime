@@ -79,8 +79,12 @@ the MAIN port, at lower rates the BGM port. Rates above 48 kHz return
 Configure with `-DVR_BUILD_SAMPLES=ON` to link `vr_platform_smoke` and `vr_gfx_spin`. On Vita the smoke sample's
 log should appear at `ux0:data/vr-platform-smoke/log.txt`, report at least 2000
 microseconds elapsed, file result `-2` (not found), and the buttons held at launch. The sample is an ELF;
-SELF/VPK packaging is left to the consuming application. Cross-compilation and
-linking have been checked; on-device timing and persistent logging still require
-hardware validation. `vr_gfx_spin` draws a spinning textured square for about
-five seconds over a pretransformed backdrop. It needs `libshacccg.suprx` on the device and
-has not been run on hardware yet.
+SELF/VPK packaging is left to the consuming application. `vr_gfx_spin` draws a
+spinning textured square for about five seconds over a pretransformed backdrop.
+It needs `libshacccg.suprx` on the device.
+
+The samples themselves have not been packaged and run, but every Vita backend
+(platform, files, input including both touch panels, graphics through the
+Direct3D 8 shim, and audio) has been verified on a PS Vita by an application
+that uses the same code paths, at a locked 60 fps. The first frame takes about
+2.4 s while vitaGL compiles the shaders at runtime.

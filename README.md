@@ -11,12 +11,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Module                        | Host backend    | Vita backend |
 | ----------------------------- | --------------- | ------------ |
-| `vr_platform` (time, logging) | done            | implemented; hardware validation pending |
-| `vr_fs` (read-only files)     | done            | implemented; hardware validation pending |
-| `vr_input` (pad, touch)       | headless or SDL2 gamepad | implemented; hardware validation pending |
-| `vr_gfx` (3D, fixed-function) | software reference rasterizer; SDL2 window optional | vitaGL; implemented, hardware validation pending |
-| `vr_audio` (mixer)            | software mixer; SDL2 device optional | sceAudioOut; implemented, hardware validation pending |
-| Direct3D 8 shim (`d3dshim/`)  | done, on top of `vr_gfx` | implemented; hardware validation pending |
+| `vr_platform` (time, logging) | done            | done; verified on hardware |
+| `vr_fs` (read-only files)     | done            | done; verified on hardware |
+| `vr_input` (pad, touch)       | headless or SDL2 gamepad | done; verified on hardware (buttons, sticks, front and rear touch) |
+| `vr_gfx` (3D, fixed-function) | software reference rasterizer; SDL2 window optional | vitaGL; verified on hardware (60 fps) |
+| `vr_audio` (mixer)            | software mixer; SDL2 device optional | sceAudioOut; verified on hardware |
+| Direct3D 8 shim (`d3dshim/`)  | done, on top of `vr_gfx` | verified on hardware (lighting, depth, culling, textures) |
 | Direct3D 9 shim               | planned         | planned      |
 | Shader translator (→ GXP)     | planned         | planned      |
 
