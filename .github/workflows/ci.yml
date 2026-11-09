@@ -49,7 +49,7 @@ jobs:
       - name: List SDK libraries
         run: ls "$VITASDK/arm-vita-eabi/lib" | sort | tr '\n' ' '
       - name: Configure
-        run: cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DVR_BUILD_SAMPLES=ON
+        run: cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DVR_BUILD_SAMPLES=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
       - name: Build
         run: cmake --build build-vita
       - name: Check library
