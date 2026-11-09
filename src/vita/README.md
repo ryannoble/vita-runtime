@@ -51,6 +51,24 @@ vitaGL gaps and how the backend handles them:
 - No constant blend colour: `VR_BLEND_CONSTANT` and `VR_BLEND_INV_CONSTANT`
   become `GL_ONE` and `GL_ZERO`, and a one-time warning is logged.
 
+vitaGL behaviours that differ from desktop GL (each one has caused or could
+cause a crash):
+
+- Create Cg shaders with `GL_CG_VERTEX_SHADER_EXT` / `GL_CG_FRAGMENT_SHADER_EXT`.
+  `GL_VERTEX_SHADER` / `GL_FRAGMENT_SHADER` mean GLSL; in vitaGL's default
+  postponed mode those report `GL_COMPILE_STATUS` as true and only compile at
+  link time.
+- Always check `GL_LINK_STATUS`. Querying a program that failed to link (for
+  example `glGetAttribLocation`) dereferences its missing shaders and crashes.
+- Never pass 0 to `glDeleteProgram` or `glDeleteShader`; vitaGL indexes
+  `progs[id - 1]`.
+- Uniform locations are encoded pointers (`-(GLint)ptr`); -1 and 0 are ignored
+  by `glUniform*`, but never invent or reuse locations across programs.
+
+When a frame crashes, `log.txt` in the app's data folder holds the backend's
+compiler/linker messages; the system's `.psp2dmp` core file in `ux0:data/`
+can be decoded against the unstripped ELF with `vita-parse-core`.
+
 ## Audio
 
 `vr_audio` mixes on a high-priority thread and writes through `sceAudioOut` in
