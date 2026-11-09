@@ -15,6 +15,53 @@ uint64_t vr__fnv1a64(const void *data, size_t size, uint64_t seed)
     return h;
 }
 
+static uint64_t hash_string(uint64_t h, const char *value)
+{
+    uint8_t length[8];
+    uint64_t n = value ? (uint64_t)strlen(value) : 0;
+    int i;
+
+    for (i = 0; i < 8; i++)
+        length[i] = (uint8_t)(n >> (8 * i));
+    h = vr__fnv1a64(length, sizeof(length), h);
+    return n ? vr__fnv1a64(value, (size_t)n, h) : h;
+}
+
+uint64_t vr__shader_cache_environment_id(const char *runtime_build_id,
+                                         const char *vitagl_build_id,
+                                         const char *gl_version,
+                                         const char *renderer)
+{
+    uint64_t h = VR__FNV_SEED;
+
+    h = hash_string(h, "vita-runtime-shader-cache-environment-v1");
+    h = hash_string(h, runtime_build_id);
+    h = hash_string(h, vitagl_build_id);
+    h = hash_string(h, gl_version);
+    return hash_string(h, renderer);
+}
+
+uint64_t vr__shader_cache_key(uint64_t environment_id, const char *defines,
+                              const char *vertex_source, const char *fragment_source)
+{
+    uint8_t id[8];
+    uint64_t h = VR__FNV_SEED;
+    int i;
+
+    for (i = 0; i < 8; i++)
+        id[i] = (uint8_t)(environment_id >> (8 * i));
+    h = vr__fnv1a64("VRSK", 4, h);
+    h = vr__fnv1a64(id, sizeof(id), h);
+    h = hash_string(h, defines);
+    h = hash_string(h, vertex_source);
+    return hash_string(h, fragment_source);
+}
+
+int vr__shader_cache_store_allowed(int vertex_compiled, int fragment_compiled, int linked)
+{
+    return vertex_compiled && fragment_compiled && linked;
+}
+
 static void put_u32(uint8_t *p, uint32_t v)
 {
     int i;

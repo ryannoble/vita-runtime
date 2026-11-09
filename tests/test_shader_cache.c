@@ -19,6 +19,7 @@ int main(void)
 {
     const char payload[] = "compiled program bytes";
     const uint64_t key = 0x1122334455667788ull;
+    uint64_t env, source_key;
     uint8_t file[128], copy[128];
     size_t n, got = 0;
     const void *p;
@@ -29,6 +30,31 @@ int main(void)
     /* Hashing in pieces equals hashing the whole. */
     CHECK(vr__fnv1a64("bc", 2, vr__fnv1a64("a", 1, VR__FNV_SEED)) ==
           vr__fnv1a64("abc", 3, VR__FNV_SEED));
+
+    env = vr__shader_cache_environment_id("runtime-a", "vitagl-a", "GL a", "GPU a");
+    source_key = vr__shader_cache_key(env, "defines", "vertex", "fragment");
+    CHECK(source_key != vr__shader_cache_key(env, "defines", "vertex changed", "fragment"));
+    CHECK(source_key != vr__shader_cache_key(env, "defines", "vertex", "fragment changed"));
+    CHECK(source_key != vr__shader_cache_key(env, "defines changed", "vertex", "fragment"));
+    CHECK(vr__shader_cache_key(env, "ab", "c", "fragment") !=
+          vr__shader_cache_key(env, "a", "bc", "fragment"));
+    CHECK(source_key != vr__shader_cache_key(
+        vr__shader_cache_environment_id("runtime-b", "vitagl-a", "GL a", "GPU a"),
+        "defines", "vertex", "fragment"));
+    CHECK(source_key != vr__shader_cache_key(
+        vr__shader_cache_environment_id("runtime-a", "vitagl-b", "GL a", "GPU a"),
+        "defines", "vertex", "fragment"));
+    CHECK(source_key != vr__shader_cache_key(
+        vr__shader_cache_environment_id("runtime-a", "vitagl-a", "GL b", "GPU a"),
+        "defines", "vertex", "fragment"));
+    CHECK(source_key != vr__shader_cache_key(
+        vr__shader_cache_environment_id("runtime-a", "vitagl-a", "GL a", "GPU b"),
+        "defines", "vertex", "fragment"));
+    /* Failed vertex/fragment compilation or program linking is never storable. */
+    CHECK(vr__shader_cache_store_allowed(1, 1, 1));
+    CHECK(!vr__shader_cache_store_allowed(0, 1, 1));
+    CHECK(!vr__shader_cache_store_allowed(1, 0, 1));
+    CHECK(!vr__shader_cache_store_allowed(1, 1, 0));
 
     n = vr__cache_pack(key, payload, sizeof(payload), file, sizeof(file));
     CHECK(n == VR__CACHE_HEADER_SIZE + sizeof(payload));

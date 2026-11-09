@@ -33,14 +33,32 @@ add_library(vita_runtime
 )
 target_include_directories(vita_runtime PUBLIC include)
 if(VR_BACKEND STREQUAL "vita")
+  # GL_VERSION and GL_RENDERER are fixed strings in VitaGL, so they cannot
+  # invalidate program binaries when the linked vitaGL build changes. Hash the
+  # linked archive and shader/cache runtime sources into the cache identity.
+  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/src/vita/gfx.c" _vr_gfx_source_id)
+  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/src/shader_cache.h" _vr_cache_header_id)
+  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/src/shader_cache.c" _vr_cache_source_id)
+  string(SHA256 VR_RUNTIME_SHADER_BUILD_ID
+    "${_vr_gfx_source_id};${_vr_cache_header_id};${_vr_cache_source_id}")
+
+  find_library(VITA_GL_LIBRARY NAMES vitaGL)
+  if(NOT VITA_GL_LIBRARY)
+    message(FATAL_ERROR "Could not find VitaSDK's vitaGL library")
+  endif()
+  file(SHA256 "${VITA_GL_LIBRARY}" VR_VITAGL_BUILD_ID)
+
   target_link_libraries(vita_runtime PUBLIC
     SceLibKernel_stub SceIofilemgr_stub SceKernelThreadMgr_stub
     SceCtrl_stub SceTouch_stub SceAudio_stub
-    vitaGL vitashark SceShaccCgExt mathneon taihen_stub SceShaccCg_stub
+    "${VITA_GL_LIBRARY}" vitashark SceShaccCgExt mathneon taihen_stub SceShaccCg_stub
     SceKernelDmacMgr_stub SceGxm_stub SceDisplay_stub SceAppMgr_stub
     SceCommonDialog_stub SceSysmodule_stub SceIme_stub
     stdc++)  # vitaGL contains C++
   target_link_libraries(vita_runtime PRIVATE m)
+  target_compile_definitions(vita_runtime PRIVATE
+    VR_RUNTIME_SHADER_BUILD_ID=\"${VR_RUNTIME_SHADER_BUILD_ID}\"
+    VR_VITAGL_BUILD_ID=\"${VR_VITAGL_BUILD_ID}\")
 endif()
 
 if(VR_BUILD_SAMPLES)
